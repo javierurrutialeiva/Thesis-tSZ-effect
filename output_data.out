@@ -1,0 +1,4 @@
+/data2/javierurrutia/szeffect/codes/cluster_data.py:34: DeprecationWarning: Please import `gaussian_kde` from the `scipy.stats` namespace; the `scipy.stats.kde` namespace is deprecated and will be removed in SciPy 2.0.0.
+  from scipy.stats.kde import gaussian_kde
+Loading DATA from [92m/data2/javierurrutia/szeffect/data/[0m.
+Running [91mwith multiprocessing...[0m

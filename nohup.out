@@ -1,0 +1,570 @@
+CPU COUNT: 40
+Fitting whole data...
+  0%|          | 0/133 [00:00<?, ?it/s]  0%|          | 0/133 [00:00<?, ?it/s]
+Traceback (most recent call last):
+  File "/data2/javierurrutia/szeffect/codes/main.py", line 367, in <module>
+    main()
+  File "/data2/javierurrutia/szeffect/codes/main.py", line 288, in main
+    func,y_data, err = clusters.stacked_halo_model_func_by_bins(getattr(profiles_module, model_profile),zb = redshift_bins)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data2/javierurrutia/szeffect/codes/cluster_data.py", line 1388, in stacked_halo_model_func_by_bins
+    grouped_by_richness = self.split_optimal_richness()
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data2/javierurrutia/szeffect/codes/cluster_data.py", line 790, in split_optimal_richness
+    np.sum(
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/numpy/core/fromnumeric.py", line 2313, in sum
+    return _wrapreduction(a, np.add, 'sum', axis, dtype, out, keepdims=keepdims,
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/numpy/core/fromnumeric.py", line 88, in _wrapreduction
+    return ufunc.reduce(obj, axis, dtype, out, **passkwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+KeyboardInterrupt
+Traceback (most recent call last):
+  File "/data2/javierurrutia/szeffect/codes/main.py", line 11, in <module>
+    import profiles
+  File "/data2/javierurrutia/szeffect/codes/profiles.py", line 3, in <module>
+    from astropy.cosmology import WMAP9 as cosmo
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/astropy/cosmology/__init__.py", line 11, in <module>
+    from . import core, flrw, funcs, parameter, units, utils
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/astropy/cosmology/funcs/__init__.py", line 5, in <module>
+    from .comparison import cosmology_equal
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/astropy/cosmology/funcs/comparison.py", line 19, in <module>
+    from astropy import table
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/astropy/table/__init__.py", line 87, in <module>
+    from . import connect
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/astropy/table/connect.py", line 5, in <module>
+    from .info import serialize_method_as
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/astropy/table/info.py", line 0, in <module>
+KeyboardInterrupt
+-8.000870442973167 -10.249232120511994
+2.242104519232967 -2.2421126575255275
+6.299704061187481 0.009253771779834908
+3.5960734317385263 0.4500099741900535
+3.1489444785204093 1.8000656347648718
+running MCMC in interval richness: [23.0, 27.0] , redhisft [0.5, 0.92]
+saving sample in /data2/javierurrutia/szeffect/data/GROUPED_CLUSTERS/GROUPED_CLUSTER_RICHNESS=23.0-27.0REDSHIFT=0.5-0.92/mcmc_samples.h5
+rewriting backend
+Traceback (most recent call last):
+  File "/data2/javierurrutia/szeffect/codes/main.py", line 399, in <module>
+    main()
+  File "/data2/javierurrutia/szeffect/codes/main.py", line 313, in main
+    sampler.run_mcmc(initial_guess, nsteps, progress=True, store = True)
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/emcee/ensemble.py", line 443, in run_mcmc
+    for results in self.sample(initial_state, iterations=nsteps, **kwargs):
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/emcee/ensemble.py", line 344, in sample
+    state.log_prob, state.blobs = self.compute_log_prob(state.coords)
+                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/emcee/ensemble.py", line 489, in compute_log_prob
+    results = list(map_func(self.log_prob_fn, p))
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/multiprocessing/pool.py", line 367, in map
+    return self._map_async(func, iterable, mapstar, chunksize).get()
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/multiprocessing/pool.py", line 768, in get
+Traceback (most recent call last):
+    self.wait(timeout)
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/multiprocessing/pool.py", line 765, in wait
+Traceback (most recent call last):
+    self._event.wait(timeout)
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/threading.py", line 622, in wait
+    signaled = self._cond.wait(timeout)
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/threading.py", line 320, in wait
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/emcee/ensemble.py", line 624, in __call__
+    return self.f(x, *self.args, **self.kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    waiter.acquire()
+  File "/data2/javierurrutia/szeffect/codes/main.py", line 87, in ln_posterior
+    likelihood,y1 = ln_likelihood_func(theta, x, y, sigma, **kwargs)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data2/javierurrutia/szeffect/codes/main.py", line 184, in ln_likelihood
+    mu = model(x, theta)
+         ^^^^^^^^^^^^^^^
+  File "/data2/javierurrutia/szeffect/codes/cluster_data.py", line 1408, in func
+    y_model = np.array([[profile_model(R, M, z, params) for M in mass_arr] for z in z_arr]).astype(np.float64)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data2/javierurrutia/szeffect/codes/cluster_data.py", line 1408, in <listcomp>
+    y_model = np.array([[profile_model(R, M, z, params) for M in mass_arr] for z in z_arr]).astype(np.float64)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data2/javierurrutia/szeffect/codes/cluster_data.py", line 1408, in <listcomp>
+    y_model = np.array([[profile_model(R, M, z, params) for M in mass_arr] for z in z_arr]).astype(np.float64)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+KeyboardInterrupt
+  File "/data2/javierurrutia/szeffect/codes/profiles.py", line 60, in projected_GNFW_arcmin_fixed_c
+    R_los_kpc = np.logspace(-7, 9, rbins)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/numpy/core/function_base.py", line 298, in logspace
+    return _nx.power(base, y)
+           ^^^^^^^^^^^^^^^^^^
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/emcee/ensemble.py", line 624, in __call__
+    return self.f(x, *self.args, **self.kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data2/javierurrutia/szeffect/codes/main.py", line 86, in ln_posterior
+    lp = ln_prior_func(theta)
+         ^^^^^^^^^^^^^^^^^^^^
+  File "/data2/javierurrutia/szeffect/codes/main.py", line 171, in ln_prior
+    args = np.array(prior_parameters[i][-1].split("|")).astype(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+KeyboardInterrupt
+KeyboardInterrupt
+Traceback (most recent call last):
+Traceback (most recent call last):
+Traceback (most recent call last):
+Traceback (most recent call last):
+Traceback (most recent call last):
+Traceback (most recent call last):
+Traceback (most recent call last):
+Traceback (most recent call last):
+Traceback (most recent call last):
+Traceback (most recent call last):
+Traceback (most recent call last):
+Traceback (most recent call last):
+Traceback (most recent call last):
+Traceback (most recent call last):
+Traceback (most recent call last):
+Traceback (most recent call last):
+Traceback (most recent call last):
+Process ForkPoolWorker-13:
+Process ForkPoolWorker-32:
+Traceback (most recent call last):
+Traceback (most recent call last):
+Traceback (most recent call last):
+Traceback (most recent call last):
+Traceback (most recent call last):
+Traceback (most recent call last):
+Traceback (most recent call last):
+Traceback (most recent call last):
+Traceback (most recent call last):
+Traceback (most recent call last):
+Traceback (most recent call last):
+Traceback (most recent call last):
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/emcee/ensemble.py", line 624, in __call__
+    return self.f(x, *self.args, **self.kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data2/javierurrutia/szeffect/codes/main.py", line 87, in ln_posterior
+    likelihood,y1 = ln_likelihood_func(theta, x, y, sigma, **kwargs)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data2/javierurrutia/szeffect/codes/main.py", line 184, in ln_likelihood
+    mu = model(x, theta)
+         ^^^^^^^^^^^^^^^
+  File "/data2/javierurrutia/szeffect/codes/cluster_data.py", line 1408, in func
+    y_model = np.array([[profile_model(R, M, z, params) for M in mass_arr] for z in z_arr]).astype(np.float64)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data2/javierurrutia/szeffect/codes/cluster_data.py", line 1408, in <listcomp>
+    y_model = np.array([[profile_model(R, M, z, params) for M in mass_arr] for z in z_arr]).astype(np.float64)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/emcee/ensemble.py", line 624, in __call__
+    return self.f(x, *self.args, **self.kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data2/javierurrutia/szeffect/codes/cluster_data.py", line 1408, in <listcomp>
+    y_model = np.array([[profile_model(R, M, z, params) for M in mass_arr] for z in z_arr]).astype(np.float64)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data2/javierurrutia/szeffect/codes/profiles.py", line 60, in projected_GNFW_arcmin_fixed_c
+    R_los_kpc = np.logspace(-7, 9, rbins)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^
+Traceback (most recent call last):
+Traceback (most recent call last):
+  File "/data2/javierurrutia/szeffect/codes/main.py", line 399, in <module>
+    main()
+  File "/data2/javierurrutia/szeffect/codes/main.py", line 156, in main
+    empty_group.completeness_and_halo_func()
+  File "/data2/javierurrutia/szeffect/codes/cluster_data.py", line 1375, in completeness_and_halo_func
+    dndM = np.array([[mfunc(cosmo, M, ai) for M in mass_arr] for ai in a])
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data2/javierurrutia/szeffect/codes/cluster_data.py", line 1375, in <listcomp>
+    dndM = np.array([[mfunc(cosmo, M, ai) for M in mass_arr] for ai in a])
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data2/javierurrutia/szeffect/codes/cluster_data.py", line 1375, in <listcomp>
+    dndM = np.array([[mfunc(cosmo, M, ai) for M in mass_arr] for ai in a])
+                      ^^^^^^^^^^^^^^^^^^^
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/pyccl/halos/halo_model_base.py", line 160, in __call__
+    logM, sigM, dlns_dlogM = self._get_logM_sigM(
+                             ^^^^^^^^^^^^^^^^^^^^
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/pyccl/halos/halo_model_base.py", line 81, in _get_logM_sigM
+    cosmo.compute_sigma()  # initialize sigma(M) splines if needed
+    ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/pyccl/cosmology.py", line 755, in compute_sigma
+    pk = self.get_linear_power()
+         ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/pyccl/cosmology.py", line 773, in get_linear_power
+    self.compute_linear_power()
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/pyccl/_core/schema.py", line 128, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/pyccl/cosmology.py", line 668, in compute_linear_power
+    self._pk_lin[DEFAULT_POWER_SPECTRUM] = self._compute_linear_power()
+                                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/pyccl/_core/caching.py", line 156, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/pyccl/cosmology.py", line 650, in _compute_linear_power
+    pk = pkl if pkl is not None else self.get_camb_pk_lin()
+                                     ^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/pyccl/_core/deprecations.py", line 198, in wrapper
+    return func(**kwargs)
+           ^^^^^^^^^^^^^^
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/pyccl/boltzmann.py", line 29, in get_camb_pk_lin
+    import camb
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/camb/__init__.py", line 12, in <module>
+    from . import baseconfig
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/camb/baseconfig.py", line 140, in <module>
+    set_cl_template_file()
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/camb/baseconfig.py", line 121, in set_cl_template_file
+    func(s, ctypes.c_long(len(template)))
+KeyboardInterrupt
+Traceback (most recent call last):
+  File "/data2/javierurrutia/szeffect/codes/main.py", line 399, in <module>
+    main()
+  File "/data2/javierurrutia/szeffect/codes/main.py", line 156, in main
+    empty_group.completeness_and_halo_func()
+  File "/data2/javierurrutia/szeffect/codes/cluster_data.py", line 1375, in completeness_and_halo_func
+    dndM = np.array([[mfunc(cosmo, M, ai) for M in mass_arr] for ai in a])
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data2/javierurrutia/szeffect/codes/cluster_data.py", line 1375, in <listcomp>
+    dndM = np.array([[mfunc(cosmo, M, ai) for M in mass_arr] for ai in a])
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data2/javierurrutia/szeffect/codes/cluster_data.py", line 1375, in <listcomp>
+    dndM = np.array([[mfunc(cosmo, M, ai) for M in mass_arr] for ai in a])
+                      ^^^^^^^^^^^^^^^^^^^
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/pyccl/halos/halo_model_base.py", line 160, in __call__
+    logM, sigM, dlns_dlogM = self._get_logM_sigM(
+                             ^^^^^^^^^^^^^^^^^^^^
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/pyccl/halos/halo_model_base.py", line 81, in _get_logM_sigM
+    cosmo.compute_sigma()  # initialize sigma(M) splines if needed
+    ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/pyccl/cosmology.py", line 755, in compute_sigma
+    pk = self.get_linear_power()
+         ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/pyccl/cosmology.py", line 773, in get_linear_power
+    self.compute_linear_power()
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/pyccl/_core/schema.py", line 128, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/pyccl/cosmology.py", line 668, in compute_linear_power
+    self._pk_lin[DEFAULT_POWER_SPECTRUM] = self._compute_linear_power()
+                                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/pyccl/_core/caching.py", line 156, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/pyccl/cosmology.py", line 650, in _compute_linear_power
+    pk = pkl if pkl is not None else self.get_camb_pk_lin()
+                                     ^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/pyccl/_core/deprecations.py", line 198, in wrapper
+    return func(**kwargs)
+           ^^^^^^^^^^^^^^
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/pyccl/boltzmann.py", line 167, in get_camb_pk_lin
+    camb_res = camb.get_results(cp)
+               ^^^^^^^^^^^^^^^^^^^^
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/camb/camb.py", line 35, in get_results
+    res.calc_power_spectra(params)
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/camb/results.py", line 333, in calc_power_spectra
+    self.calc_transfers(params, only_transfers=False)
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/camb/results.py", line 313, in calc_transfers
+    if CAMBdata_gettransfers(byref(self), byref(params), byref(c_int(1 if only_transfers else 0)),
+       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+KeyboardInterrupt
+Traceback (most recent call last):
+  File "/data2/javierurrutia/szeffect/codes/main.py", line 400, in <module>
+    main()
+  File "/data2/javierurrutia/szeffect/codes/main.py", line 157, in main
+    empty_group.completeness_and_halo_func()
+  File "/data2/javierurrutia/szeffect/codes/cluster_data.py", line 1375, in completeness_and_halo_func
+    dndM = np.array([[mfunc(cosmo, M, ai) for M in mass_arr] for ai in a])
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data2/javierurrutia/szeffect/codes/cluster_data.py", line 1375, in <listcomp>
+    dndM = np.array([[mfunc(cosmo, M, ai) for M in mass_arr] for ai in a])
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data2/javierurrutia/szeffect/codes/cluster_data.py", line 1375, in <listcomp>
+    dndM = np.array([[mfunc(cosmo, M, ai) for M in mass_arr] for ai in a])
+                      ^^^^^^^^^^^^^^^^^^^
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/pyccl/halos/halo_model_base.py", line 160, in __call__
+    logM, sigM, dlns_dlogM = self._get_logM_sigM(
+                             ^^^^^^^^^^^^^^^^^^^^
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/pyccl/halos/halo_model_base.py", line 81, in _get_logM_sigM
+    cosmo.compute_sigma()  # initialize sigma(M) splines if needed
+    ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/pyccl/cosmology.py", line 757, in compute_sigma
+    status = lib.cosmology_compute_sigma(self.cosmo, pk.psp, status)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/pyccl/ccllib.py", line 1381, in cosmology_compute_sigma
+    return _ccllib.cosmology_compute_sigma(cosmo, psp, status)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+KeyboardInterrupt
+Traceback (most recent call last):
+  File "/data2/javierurrutia/szeffect/codes/main.py", line 16, in <module>
+    from cluster_data import *
+  File "/data2/javierurrutia/szeffect/codes/cluster_data.py", line 20, in <module>
+    import pandas as pd
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/pandas/__init__.py", line 141, in <module>
+    from pandas.io.api import (
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/pandas/io/api.py", line 14, in <module>
+    from pandas.io.json import read_json
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/pandas/io/json/__init__.py", line 1, in <module>
+    from pandas.io.json._json import (
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/pandas/io/json/_json.py", line 486, in <module>
+    @doc(
+     ^^^^
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/pandas/util/_decorators.py", line 364, in decorator
+    docstring_components.append(dedent(decorated.__doc__))
+                                ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/textwrap.py", line 435, in dedent
+    text = _whitespace_only_re.sub('', text)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+KeyboardInterrupt
+Traceback (most recent call last):
+  File "/data2/javierurrutia/szeffect/codes/main.py", line 11, in <module>
+    import profiles
+  File "/data2/javierurrutia/szeffect/codes/profiles.py", line 3, in <module>
+    from astropy.cosmology import WMAP9 as cosmo
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/astropy/cosmology/__init__.py", line 11, in <module>
+    from . import core, flrw, funcs, parameter, units, utils
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/astropy/cosmology/funcs/__init__.py", line 5, in <module>
+    from .comparison import cosmology_equal
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/astropy/cosmology/funcs/comparison.py", line 19, in <module>
+    from astropy import table
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/astropy/table/__init__.py", line 118, in <module>
+    import astropy.io.ascii.connect
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/astropy/io/ascii/__init__.py", line 43, in <module>
+    from .ecsv import Ecsv
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/astropy/io/ascii/ecsv.py", line 15, in <module>
+    from astropy.table import meta, serialize
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/astropy/table/meta.py", line 7, in <module>
+    import yaml
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/yaml/__init__.py", line 8, in <module>
+    from .loader import *
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/yaml/loader.py", line 9, in <module>
+    from .resolver import *
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/yaml/resolver.py", line 209, in <module>
+    re.compile(r'''^(?:[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/re/__init__.py", line 227, in compile
+    return _compile(pattern, flags)
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/re/__init__.py", line 294, in _compile
+    p = _compiler.compile(pattern, flags)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/re/_compiler.py", line 747, in compile
+    code = _code(p, flags)
+           ^^^^^^^^^^^^^^^
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/re/_compiler.py", line 580, in _code
+    _compile(code, p.data, flags)
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/re/_compiler.py", line 174, in _compile
+    _compile(code, av, flags)
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/re/_compiler.py", line 119, in _compile
+    _compile(code, av[2], flags)
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/re/_compiler.py", line 111, in _compile
+    _compile(code, av[2], flags)
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/re/_compiler.py", line 86, in _compile
+    charset, hascased = _optimize_charset(av, iscased, tolower, fixes)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/re/_compiler.py", line 304, in _optimize_charset
+    break
+KeyboardInterrupt
+Traceback (most recent call last):
+  File "/data2/javierurrutia/szeffect/codes/cluster_data.py", line 14, in <module>
+    from astropy.cosmology import Planck18 as cosmo
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/astropy/cosmology/__init__.py", line 13, in <module>
+    from . import io  # needed before 'realizations'  # isort: split
+    ^^^^^^^^^^^^^^^^
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/astropy/cosmology/io/__init__.py", line 8, in <module>
+    from . import cosmology, ecsv, html, mapping, model, row, table, yaml
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/astropy/cosmology/io/ecsv.py", line 9, in <module>
+    from .table import from_table, to_table
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/astropy/cosmology/io/table.py", line 11, in <module>
+    from .utils import convert_parameter_to_column
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/astropy/cosmology/io/utils.py", line 5, in <module>
+    from astropy.modeling import Parameter as ModelParameter
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/astropy/modeling/__init__.py", line 10, in <module>
+    from . import fitting, models
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/astropy/modeling/models.py", line 14, in <module>
+    from .projections import *
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/astropy/modeling/projections.py", line 1194, in <module>
+    class Sky2Pix_ConicEquidistant(Sky2PixProjection, Conic):
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/astropy/modeling/core.py", line 112, in __new__
+    ("__sub__", _model_oper("-")),
+                ^^^^^^^^^^^^^^^^
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/astropy/modeling/core.py", line 69, in _model_oper
+    def _model_oper(oper, **kwargs):
+    
+KeyboardInterrupt
+/data2/javierurrutia/szeffect/codes/cluster_data.py:34: DeprecationWarning: Please import `gaussian_kde` from the `scipy.stats` namespace; the `scipy.stats.kde` namespace is deprecated and will be removed in SciPy 2.0.0.
+  from scipy.stats.kde import gaussian_kde
+Running with pool...
+/data2/javierurrutia/szeffect/codes/cluster_data.py:532: UserWarning: Creating legend with loc="best" can be slow with large amounts of data.
+  fig.savefig(
+Loading DATA from [92m/data2/javierurrutia/szeffect/data/[0m.
+Changing units from [92mdeg[0m to [92mrad[0m.
+N matched clusters in DR5 = 0
+richness interval [15.0, 20.0] was finish in 37.20524311065674 seconds.
+Loading DATA from [92m/data2/javierurrutia/szeffect/data/[0m.
+Changing units from [92mdeg[0m to [92mrad[0m.
+N matched clusters in DR5 = 35
+richness interval [100.0, 110.0] was finish in 132.66189312934875 seconds.
+Loading DATA from [92m/data2/javierurrutia/szeffect/data/[0m.
+Changing units from [92mdeg[0m to [92mrad[0m.
+N matched clusters in DR5 = 80
+richness interval [110.0, 300.0] was finish in 241.38310885429382 seconds.
+Loading DATA from [92m/data2/javierurrutia/szeffect/data/[0m.
+Changing units from [92mdeg[0m to [92mrad[0m.
+N matched clusters in DR5 = 143
+richness interval [80.0, 100.0] was finish in 515.0469975471497 seconds.
+Loading DATA from [92m/data2/javierurrutia/szeffect/data/[0m.
+Changing units from [92mdeg[0m to [92mrad[0m.
+N matched clusters in DR5 = 84
+richness interval [60.0, 65.0] was finish in 641.6351451873779 seconds.
+Loading DATA from [92m/data2/javierurrutia/szeffect/data/[0m.
+Changing units from [92mdeg[0m to [92mrad[0m.
+N matched clusters in DR5 = 38
+richness interval [50.0, 52.5] was finish in 678.2819378376007 seconds.
+Loading DATA from [92m/data2/javierurrutia/szeffect/data/[0m.
+Changing units from [92mdeg[0m to [92mrad[0m.
+N matched clusters in DR5 = 26
+richness interval [44.0, 46.0] was finish in 804.9779996871948 seconds.
+Loading DATA from [92m/data2/javierurrutia/szeffect/data/[0m.
+Changing units from [92mdeg[0m to [92mrad[0m.
+N matched clusters in DR5 = 4
+richness interval [29.5, 30.0] was finish in 843.6477417945862 seconds.
+Loading DATA from [92m/data2/javierurrutia/szeffect/data/[0m.
+Changing units from [92mdeg[0m to [92mrad[0m.
+N matched clusters in DR5 = 7
+richness interval [28.0, 28.5] was finish in 883.0254330635071 seconds.
+Loading DATA from [92m/data2/javierurrutia/szeffect/data/[0m.
+Changing units from [92mdeg[0m to [92mrad[0m.
+N matched clusters in DR5 = 5
+richness interval [27.5, 28.0] was finish in 915.0593636035919 seconds.
+Loading DATA from [92m/data2/javierurrutia/szeffect/data/[0m.
+Changing units from [92mdeg[0m to [92mrad[0m.
+N matched clusters in DR5 = 28
+richness interval [42.0, 44.0] was finish in 929.8310503959656 seconds.
+Loading DATA from [92m/data2/javierurrutia/szeffect/data/[0m.
+Changing units from [92mdeg[0m to [92mrad[0m.
+N matched clusters in DR5 = 182
+richness interval [65.0, 80.0] was finish in 974.2034442424774 seconds.
+Loading DATA from [92m/data2/javierurrutia/szeffect/data/[0m.
+Changing units from [92mdeg[0m to [92mrad[0m.
+N matched clusters in DR5 = 6
+richness interval [27.0, 27.5] was finish in 1052.1202011108398 seconds.
+Loading DATA from [92m/data2/javierurrutia/szeffect/data/[0m.
+Changing units from [92mdeg[0m to [92mrad[0m.
+N matched clusters in DR5 = 28
+richness interval [40.0, 42.0] was finish in 1095.543949842453 seconds.
+Loading DATA from [92m/data2/javierurrutia/szeffect/data/[0m.
+Changing units from [92mdeg[0m to [92mrad[0m.
+N matched clusters in DR5 = 2
+richness interval [26.5, 27.0] was finish in 1113.4161095619202 seconds.
+Loading DATA from [92m/data2/javierurrutia/szeffect/data/[0m.
+Changing units from [92mdeg[0m to [92mrad[0m.
+N matched clusters in DR5 = 7
+richness interval [20.0, 20.5] was finish in 1058.4999084472656 seconds.
+Loading DATA from [92m/data2/javierurrutia/szeffect/data/[0m.
+Changing units from [92mdeg[0m to [92mrad[0m.
+N matched clusters in DR5 = 5
+richness interval [26.0, 26.5] was finish in 1121.508534669876 seconds.
+Loading DATA from [92m/data2/javierurrutia/szeffect/data/[0m.
+Changing units from [92mdeg[0m to [92mrad[0m.
+N matched clusters in DR5 = 13
+richness interval [32.0, 33.0] was finish in 1138.0234591960907 seconds.
+Loading DATA from [92m/data2/javierurrutia/szeffect/data/[0m.
+Changing units from [92mdeg[0m to [92mrad[0m.
+N matched clusters in DR5 = 9
+richness interval [33.0, 34.0] was finish in 1155.5375056266785 seconds.
+Loading DATA from [92m/data2/javierurrutia/szeffect/data/[0m.
+Changing units from [92mdeg[0m to [92mrad[0m.
+N matched clusters in DR5 = 5
+richness interval [25.5, 26.0] was finish in 1186.653357744217 seconds.
+Loading DATA from [92m/data2/javierurrutia/szeffect/data/[0m.
+Changing units from [92mdeg[0m to [92mrad[0m.
+N matched clusters in DR5 = 56
+richness interval [46.0, 50.0] was finish in 1208.4946670532227 seconds.
+Loading DATA from [92m/data2/javierurrutia/szeffect/data/[0m.
+Changing units from [92mdeg[0m to [92mrad[0m.
+N matched clusters in DR5 = 11
+richness interval [25.0, 25.5] was finish in 1217.0678322315216 seconds.
+Loading DATA from [92m/data2/javierurrutia/szeffect/data/[0m.
+Changing units from [92mdeg[0m to [92mrad[0m.
+N matched clusters in DR5 = 28
+richness interval [38.0, 40.0] was finish in 1249.8908915519714 seconds.
+Loading DATA from [92m/data2/javierurrutia/szeffect/data/[0m.
+Changing units from [92mdeg[0m to [92mrad[0m.
+N matched clusters in DR5 = 11
+richness interval [31.0, 32.0] was finish in 1253.123575925827 seconds.
+Loading DATA from [92m/data2/javierurrutia/szeffect/data/[0m.
+Changing units from [92mdeg[0m to [92mrad[0m.
+N matched clusters in DR5 = 6
+richness interval [24.5, 25.0] was finish in 1289.37513256073 seconds.
+Loading DATA from [92m/data2/javierurrutia/szeffect/data/[0m.
+Changing units from [92mdeg[0m to [92mrad[0m.
+N matched clusters in DR5 = 3
+richness interval [24.0, 24.5] was finish in 1334.0625 seconds.
+Loading DATA from [92m/data2/javierurrutia/szeffect/data/[0m.
+Changing units from [92mdeg[0m to [92mrad[0m.
+N matched clusters in DR5 = 2
+richness interval [23.5, 24.0] was finish in 1357.158130645752 seconds.
+Loading DATA from [92m/data2/javierurrutia/szeffect/data/[0m.
+Changing units from [92mdeg[0m to [92mrad[0m.
+N matched clusters in DR5 = 7
+richness interval [30.0, 31.0] was finish in 1384.5728068351746 seconds.
+Loading DATA from [92m/data2/javierurrutia/szeffect/data/[0m.
+Changing units from [92mdeg[0m to [92mrad[0m.
+N matched clusters in DR5 = 6
+richness interval [23.0, 23.5] was finish in 1406.809662103653 seconds.
+Loading DATA from [92m/data2/javierurrutia/szeffect/data/[0m.
+Changing units from [92mdeg[0m to [92mrad[0m.
+N matched clusters in DR5 = 1
+richness interval [22.5, 23.0] was finish in 1481.271469593048 seconds.
+Loading DATA from [92m/data2/javierurrutia/szeffect/data/[0m.
+Changing units from [92mdeg[0m to [92mrad[0m.
+N matched clusters in DR5 = 29
+richness interval [36.0, 38.0] was finish in 1488.8726518154144 seconds.
+Loading DATA from [92m/data2/javierurrutia/szeffect/data/[0m.
+Changing units from [92mdeg[0m to [92mrad[0m.
+N matched clusters in DR5 = 8
+richness interval [21.5, 22.0] was finish in 1511.0621085166931 seconds.
+Loading DATA from [92m/data2/javierurrutia/szeffect/data/[0m.
+Changing units from [92mdeg[0m to [92mrad[0m.
+N matched clusters in DR5 = 4
+richness interval [22.0, 22.5] was finish in 1515.7516422271729 seconds.
+Loading DATA from [92m/data2/javierurrutia/szeffect/data/[0m.
+Changing units from [92mdeg[0m to [92mrad[0m.
+N matched clusters in DR5 = 21
+richness interval [34.0, 36.0] was finish in 1519.772653579712 seconds.
+Loading DATA from [92m/data2/javierurrutia/szeffect/data/[0m.
+Changing units from [92mdeg[0m to [92mrad[0m.
+N matched clusters in DR5 = 8
+richness interval [28.5, 29.5] was finish in 1518.7398376464844 seconds.
+Loading DATA from [92m/data2/javierurrutia/szeffect/data/[0m.
+Changing units from [92mdeg[0m to [92mrad[0m.
+N matched clusters in DR5 = 5
+richness interval [21.0, 21.5] was finish in 1522.8586919307709 seconds.
+Loading DATA from [92m/data2/javierurrutia/szeffect/data/[0m.
+Changing units from [92mdeg[0m to [92mrad[0m.
+N matched clusters in DR5 = 7
+richness interval [20.5, 21.0] was finish in 1526.3778607845306 seconds.
+Loading DATA from [92m/data2/javierurrutia/szeffect/data/[0m.
+Changing units from [92mdeg[0m to [92mrad[0m.
+N matched clusters in DR5 = 129
+richness interval [52.5, 60.0] was finish in 1270.2658960819244 seconds.
+Traceback (most recent call last):
+  File "/data2/javierurrutia/szeffect/codes/cluster_data.py", line 10, in <module>
+    from astropy.coordinates import SkyCoord
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/astropy/coordinates/__init__.py", line 13, in <module>
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/astropy/coordinates/builtin_frames/__init__.py", line 30, in <module>
+    from .cirs import CIRS
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/astropy/coordinates/builtin_frames/cirs.py", line 8, in <module>
+    from .utils import DEFAULT_OBSTIME, EARTH_CENTER
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/astropy/coordinates/builtin_frames/utils.py", line 16, in <module>
+    from astropy.utils import iers
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/astropy/utils/iers/__init__.py", line 1, in <module>
+    from .iers import *
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/astropy/utils/iers/iers.py", line 23, in <module>
+    from astropy.table import MaskedColumn, QTable
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/astropy/table/__init__.py", line 90, in <module>
+    from .operations import (
+  File "/home/javierurrutia/.conda/envs/jav-env/lib/python3.11/site-packages/astropy/table/operations.py", line 25, in <module>
+    from .table import Column, MaskedColumn, QTable, Row, Table
+  File "<frozen importlib._bootstrap>", line 1176, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1147, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 690, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 936, in exec_module
+  File "<frozen importlib._bootstrap_external>", line 1069, in get_code
+  File "<frozen importlib._bootstrap_external>", line 729, in _compile_bytecode
+KeyboardInterrupt
