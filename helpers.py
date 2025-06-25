@@ -63,6 +63,7 @@ def prop2arr(prop,delimiter=',',dtype=np.float64, remove_white_spaces = True):
 	convert a property from a configuration file to a numpy array
 	"""
 	arr = prop.replace(' ','').split(delimiter) if remove_white_spaces else prop.split(delimiter)
+    
 	return np.array(arr,dtype=dtype)
 
 
@@ -746,6 +747,15 @@ def split_multimodal(data, min_chi2 = None, nbins = 200, threshold = 0.5, output
         return [means[indx]], [lowers[indx]], [uppers[indx]]
     return means, lowers, uppers
 
+def completeness_des(lambda_true, lambda_obs, z):
+    fmask = 1
+    fproj = 1
+    F =  (1- fmask)*(1-fproj)*np.exp((-(lambda_obs - mu)**2)/(2*sigma**2))/(2*np.pi*sigma**2)
+    G = 1/2 * ((1 - fmask)*fproj*tau + fmask*fproj/lambda_true)*np.exp(tau/2 * (2*mu + tau*sigma**2 - 2*lambda_obs))*erfc((mu + sigma**2*tau - lambda_obs)/(np.sqrt(2)*sigma))
+    P = fmask/(2*lambda_true) * (erfc((mu - lambda_obs - lambda_true)/(np.sqrt(2)*sigma))) - erfc((mu - lambda_obs)/ (np.sqrt(2) * sigma))
+    R = -fmask*fproj/(2*lambda_true)*(np.exp((tau/2 * tau*sigma**2 - 2*lambda_obs - tau*lambda_true)))*erfc((mu + tau*sigma**2 - lambda_obs - lambda_true)/(np.sqrt(2) * sigma))
+    return F + G + P + R
+    
 def pte(chi2, cov, cinv=None, n_samples=10000, return_samples=False, return_realizations = False):
     """Probability to exceed chi2 by Monte Carlo sampling the
     covariance matrix
@@ -767,7 +777,6 @@ def pte(chi2, cov, cinv=None, n_samples=10000, return_samples=False, return_real
         Number of Monte Carlo samples to draw.
     return_samples : bool, optional
         Whether to return the full Monte Carlo chi2 vector
-
     Returns
     -------
     pte : float
@@ -827,6 +836,8 @@ def text2latex(param):
         return "$"+param+"$"
     if param in greek_letters and param[-1].isdigit() == False:
         return f"${greek_letters[param]}$"
+    if param.split("_")[0] in greek_letters:
+        return f"${greek_letters[param.split('_')[0]]}_{param.split('_')[1]}$"
     if param[:-1] in greek_letters and param[-1].isdigit():
         return f"${greek_letters[param[:-1]]}_{param[-1]}$"
     elif len(param) > 1 and param[-1].isdigit():
@@ -1367,6 +1378,16 @@ def compute_projected_offset(ra1, dec1, z1, ra2, dec2, z2, cosmo, sep = 1 * u.ar
     return d_proj
 
 
+def sort_paths(list, by_richness = True):
+    pattern = re.compile(r'l(\d+)-(\d+)_') if by_richness == True else re.compile(r'z(\d+)-(\d+)')
+    def sort_key(path):
+        m = pattern.search(path)
+        if not m:
+            return (float('inf'), float('inf'))
+        low, high = map(int, m.groups())
+        return (low, high)
+    sorted_paths = sorted(paths, key=sort_key)
+    return sorted_paths
 def plot_grouped_clusters(grouped_clusters, labels = None, fig = None, suptitle = "", split_by_richness = True,
          split_by_redshift = False, contours = False, colors = None, sort_colors = False, add_snr = False, 
          labels_coords = (0.5,0.75),**kwargs):
@@ -1435,6 +1456,29 @@ def plot_grouped_clusters(grouped_clusters, labels = None, fig = None, suptitle 
         ax[i].set(**ax_kwargs)
     fig.suptitle(suptitle, **suptitle_kwargs)
     return fig
+
+def enmap2binned_cll(path, ell_max = 3000, ell_min = 2, delta_ell = 20, full = False):
+    from pixell import curvedsky
+    imap = enmap.read_map(path)
+    taper_mask = enmap.apod(enmap.ones(imap.shape, imap.wcs), width=100)
+    alms_taper = curvedsky.map2alm(taper_mask * imap, lmax=ell_max)
+    w2 = np.sum(taper_mask.pixsizemap() * taper_mask**2) / (4*np.pi)
+    cl = curvedsky.alm2cl(alms_taper) / w2
+    ell = np.arange(len(cl))
+    l_edges = np.arange(ell.min(), ell.max() + delta_ell, delta_ell)
+    binned_cll = np.zeros(len(l_edges)-1)
+    errors = np.zeros(len(l_edges)-1)
+    bins_centers = np.zeros(len(l_edges) - 1)
+    for i in range(len(l_edges) - 1):
+        mask = np.where((ell > l_edges[i]) & (ell <= l_edges[i+1]))
+        binned_cll[i] = np.mean(cl[mask])
+        errors[i] = np.std(cl[mask])
+        bins_centers = (l_edges[i] + l_edges[i + 1])/2
+    if full == False:
+        return bins_centers, binned_cll, errors
+    else:
+        return (bins_centers, binned_cll, errors), (ell, cl)
+
 def load_kappa_data(source_path, folder, output_path, load_filter_only = True):
     source_path = source_path[:-1] if source_path[-1] == "/" else source_path
     folder = folder[:-1] if folder[-1] == "/" else folder
@@ -1450,8 +1494,10 @@ def load_kappa_data(source_path, folder, output_path, load_filter_only = True):
     code_content = f"""
 from profiley.filtering import Filter
 import numpy as np
-filt = Filter('{output_path}{folder}/{folder}_kmask.fits')
+import os
 
+current_path = os.path.dirname(os.path.realpath(__file__))
+filt = Filter(current_path + '/des2_l20_z0p1_kmask.fits')
 def apply_k_space_filter(R, data, units = "arcmin"):
     if hasattr(R,"value"):
         R = R.value
@@ -1551,6 +1597,7 @@ def two_halo_term(P, M, z, R, cosmo, params, delta = 500, background = "matter",
         P2h = k**2/(2*np.pi**2) * sin_term2 * PhP
     elif r_units == "arcmin":
         R = R if hasattr(R, "unit") else R*u.arcmin
+        R = R.to(u.rad)
         Da_co = planck18.angular_diameter_distance(z) * (1 + z)
         R_Mpc = ((R.to(u.rad)) * Da_co).value
         ki_R = np.outer(R_Mpc, k)
@@ -1711,7 +1758,7 @@ def make_2halo_term_interpolator(P = None, M_arr = None, z_arr = None, R = None,
     evals = np.reshape(evals, shape)
     full_grid = (*params, z_arr, np.log10(M_arr), R)
     interpolator = RegularGridInterpolator(
-        full_grid,
+        full_grid,  
         np.log10(evals),
         method=interpolation,
         bounds_error=False,
@@ -1775,6 +1822,118 @@ def null_test(x, chain, null_test_idx, func, N_realizations = 100, bins = 30, si
             profs = func(x, new_params)
             null_test_results.append(profs)
     return np.array(null_test_results)
+
+
+def weighted_covariance(P, sigma, W = None):
+    """
+    P     : array of shape (Nmaps, Nb) with your bootstrap/jackknife profiles
+    sigma : same shape, giving per-profile uncertainties
+    returns:
+      cov  : (Nb, Nb) weighted covariance matrix
+      mu   : (Nb,) weighted mean
+    """
+    # 1) Weights: shape (Nmaps, Nb)
+    W = 1.0 / (sigma) if W is None else W
+    # 2) Weighted means: shape (Nb,)
+    Wsum = np.sum(W, axis=0)                # sum of weights per bin
+    mu   = np.sum(P * W, axis=0) / Wsum     # weighted means
+
+    # 3) Deviations: shape (Nmaps, Nb)
+    D = P - mu[None, :]
+
+    # 4) Compute Wij^(1) and Wij^(2) for all (i,j) at once
+    #    - we'll build a (Nb, Nb) matrix for each
+    # For speed we can exploit broadcast:
+    #   Wsum_matrix = Wsum_i * Wsum_j
+    # But we need sum_k (W_ki W_kj)  and sum_k (W_ki W_kj)^2
+    Nmaps, Nb = P.shape
+    # Expand: W: (Nmaps, Nb) → (Nmaps, Nb, 1) and (Nmaps, 1, Nb)
+    Wi = W[:, :, None]    # shape (Nmaps, Nb, 1)
+    Wj = W[:, None, :]    # shape (Nmaps, 1, Nb)
+    Wij = Wi * Wj         # shape (Nmaps, Nb, Nb)
+
+    # Sum over maps axis:
+    W1 = Wij.sum(axis=0)      # shape (Nb, Nb)
+    W2 = (Wij**2).sum(axis=0) # shape (Nb, Nb)
+
+    # 5) Numerator: sum_k (W_ki W_kj D_ki D_kj)
+    Di = D[:, :, None]   # (Nmaps, Nb, 1)
+    Dj = D[:, None, :]   # (Nmaps, 1, Nb)
+    numer = np.sum(Wij * Di * Dj, axis=0)  # (Nb, Nb)
+
+    # 6) Denominator with small‐eps safeguard
+    denom = W1 - (W2 / W1)
+    # avoid zeros
+    zero_mask = denom <= 0
+    denom[zero_mask] = np.nan  # propagate invalid → will become NaN
+
+    cov = numer / denom
+    # if you’d rather zero them:
+    cov = np.nan_to_num(cov, nan=0.0, posinf=0.0, neginf=0.0)
+
+    return cov, mu
+
+
+def jackknife_covariance(data, width_deg, radii_arcmin, npatches, center=None):
+    """
+    Estimate covariance of radial profile via jackknife resampling across spatial patches.
+
+    Steps:
+      1. Divide the map into `npatches` roughly equal-area patches.
+      2. For each patch k, omit patch k and compute the radial profile on the remaining data.
+      3. Compute the jackknife covariance:
+         Cov_{ij} = (N-1)/N * \sum_{k=1}^N (m^k_i - m_i)(m^k_j - m_j)
+      where m^k is the profile leaving out patch k, and m is the mean profile over all leave-one-out samples.
+
+    Parameters
+    ----------
+    data : 2D numpy array
+    width_deg : float
+    radii_arcmin : array-like
+    npatches : int
+        Number of patches for jackknife.
+    center : tuple, optional
+
+    Returns
+    -------
+    cov : 2D numpy array
+        Covariance matrix (len(radii) x len(radii)).
+    m_mean : numpy array
+        Mean radial profile across jackknife samples.
+    """
+    ny, nx = data.shape
+    # Define patch grid: try square grid
+    px = int(np.sqrt(npatches))
+    py = int(np.ceil(npatches/px))
+    # compute pixel ranges for each patch
+    x_edges = np.linspace(0, nx, px+1, dtype=int)
+    y_edges = np.linspace(0, ny, py+1, dtype=int)
+    # get leave-one-out profiles
+    jk_profiles = []
+    for ix in range(px):
+        for iy in range(py):
+            if len(jk_profiles) >= npatches:
+                break
+            # mask for patch
+            mask_patch = np.zeros_like(data, dtype=bool)
+            mask_patch[y_edges[iy]:y_edges[iy+1], x_edges[ix]:x_edges[ix+1]] = True
+            data_loo = data.copy()
+            data_loo[mask_patch] = np.nan
+            m = radial_profiles2(data_loo, R_profiles, width = width)
+            jk_profiles.append(m)
+    jk_profiles = np.array(jk_profiles)
+    # mean profile
+    m_mean = jk_profiles.mean(axis=0)
+    N = jk_profiles.shape[0]
+    # covariance
+    cov = np.zeros((N, N)) if False else np.zeros((len(radii_arcmin), len(radii_arcmin)))
+    # formula
+    for k in range(N):
+        diff = jk_profiles[k] - m_mean
+        cov += np.outer(diff, diff)
+    cov *= (N - 1) / N
+    return cov, m_mean
+
 def random_from_histogram(data = None, prob = None, bin_edges = None, counts = None, bins=100, 
                           cut = False, sigma = 1):
     """
