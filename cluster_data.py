@@ -12,6 +12,7 @@ from configparser import ConfigParser
 
 # Third-Party Libraries
 import numpy as np
+from icecream import ic
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
@@ -30,6 +31,7 @@ from astropy.io import fits
 from astropy.coordinates import SkyCoord
 from astropy.cosmology import Planck18 as cosmo
 from astropy.wcs import WCS
+from astropy.io.fits import Header
 from astropy import constants as const
 from astropy.table import Table
 
@@ -45,6 +47,10 @@ from scipy.signal import convolve2d as conv2d
 from scipy.stats.kde import gaussian_kde
 from scipy.ndimage import gaussian_filter1d, gaussian_filter
 
+#aditionals libraries
+import numbers
+from collections.abc import Sequence
+
 #numba
 from numba import jit, njit
 
@@ -59,7 +65,7 @@ import emcee
 from config import *
 from helpers import *
 import profiles
-
+from profiles import *
 warnings.filterwarnings(
     "ignore",
     message="Data has no positive values, and therefore cannot be log-scaled.",
@@ -129,137 +135,6 @@ def compute_two_halo(Rgrid, lambda2halo_grid, z2halo_grid, params, Pk, bh,
     P2halo = ((sin_term2[None, None, :,:,:]* k2halo_grid[:,:,None,:,:]**2)[:,:,:,:,None,:] * bhuPk[:,:,None,:,:,:])/(2*np.pi**2)
     return P2halo
 
-
-def extract_cluster_data(richness_range=None):
-    """
-    Extract the cluster data from the files specified in config.ini
-
-    - data_mask_ratio: change which must be the ratio between the number of pixells equal to one with the total pixells
-      in the mask.
-
-    """
-    ufrom, uto = prop2arr(config["EXTRACT"]["CHANGE_UNIT"], dtype=str)
-    zmin, zmax = prop2arr(config["EXTRACT"]["redshift"], dtype=np.float64)
-    rewrite = bool(config["EXTRACT"]["REWRITE"])
-    #I should change the name of the variable but its so boring
-    redmapper = cluster_catalog
-    agn = agn_catalog
-    dr5 = sz_clusters
-    redmapper = redmapper[(redmapper["Z"] >= zmin) & (redmapper["Z"] < zmax)]
-    if richness_range is not None:
-        if np.iterable(richness_range):
-            redmapper = redmapper[
-                (redmapper["LAMBDA_CHISQ"] >= richness_range[0])
-                & (redmapper["LAMBDA_CHISQ"] < richness_range[1])
-            ]
-            iter = range(0, len(redmapper))
-            t1 = time()
-            warnings.filterwarnings("ignore", category=RuntimeWarning)
-    else:
-        iter = tqdm(
-            range(0, len(redmapper)),
-            desc="Extracting Clusters",
-            bar_format="{l_bar}{bar}{r_bar}",
-            dynamic_ncols=True,
-        )
-    redmapper_RA, redmapper_dec = redmapper["RA"], redmapper["DEC"]
-    mask = enmap.read_map(data_path + MASK_DR6)
-    R_profiles = prop2arr(config["CLUSTER PROPERTIES"]["radius"])
-    R_units = config["CLUSTER PROPERTIES"]["r_units"]
-    FWHM, FWHM_units = prop2arr(config["CLUSTER PROPERTIES"]["FWHM"], dtype=str)
-    FWHM = np.deg2rad(float(FWHM)) / 60 if FWHM_units == "arcmin" else float(FWHM)
-    try:
-        R_profiles = R_profiles * getattr(u, R_units)
-    except:
-        print(
-            f"The units \033[92m{R_units}\033[0m doesn't exist in \033[95m{u}\033[0m."
-        )
-    if uto == "rad":
-        print(f"Changing units from \033[92m{ufrom}\033[0m to \033[92m{uto}\033[0m.")
-        redmapper_RA[redmapper_RA > 180] = redmapper_RA[redmapper_RA > 180] - 360
-        redmapper_RA = np.deg2rad(redmapper_RA)
-        redmapper_dec = np.deg2rad(redmapper_dec)
-    ra, dec = redmapper_RA, redmapper_dec
-    clusters = []
-    R_min = []
-    if match == True:
-        dr5 = dr5[(dr5["redshift"] >= zmin) & (dr5["redshift"] < zmax)]
-        dr5ra, dr5dec = dr5["RADeg"], dr5["decDeg"]
-        dr5ra[dr5ra > 180] = dr5ra[dr5ra > 180] - 360
-        dr5ra, dr5dec = np.deg2rad(dr5ra), np.deg2rad(dr5dec)
-        rm_coords = SkyCoord(ra=np.rad2deg(dr5ra)*u.degree, dec=np.rad2deg(dr5dec)*u.degree)
-        dr5_coords = SkyCoord(ra=np.rad2deg(ra)*u.degree, dec=np.rad2deg(dec)*u.degree)
-        rm_indices, dr5_indices, catalog2_indices, separation = rm_coords.search_around_sky(dr5_coords, r_match)
-        print(f"N matched clusters in DR5 = {len(rm_indices)}")
-    if match_agn == True:
-        ra_agn, dec_agn = agn["RA"], agn["DEC"]
-        ra_agn[ra_agn > 180] = ra_agn[ra_agn > 180] - 360
-        agn_coords = SkyCoord(ra = ra_agn, dec = dec_agn, unit = (u.hourangle, u.deg))
-        rm_coords = SkyCoord(ra=np.rad2deg(ra)*u.degree, dec=np.rad2deg(dec)*u.degree)
-        rm_agn_indices, agn_indices, cat_agn_indices, separation_agn = rm_coords.search_around_sky(agn_coords, r_agn_match)
-        print(f"AGN matched with RM = {len(rm_agn_indices)}")
-    for i in iter:
-        box = [
-            [dec[i] - width / 2.0, ra[i] - width / 2.0],
-            [dec[i] + width / 2.0, ra[i] + width / 2.0],
-        ]
-        smap = act_dr6_map.submap(box)
-        smask = mask.submap(box)
-        shape = np.shape(smap)
-        center = shape[0]//2, shape[1]//2
-        pixel_width = np.rad2deg(width) / np.shape(smap)[0] * 60
-        x,y = np.indices(np.shape(smap))
-        theta = np.sqrt(((x - center[0])*pixel_width)**2 + (((y - center[1]))*pixel_width)**2) * u.arcmin
-        R = (theta.to(u.radian) * cosmo.angular_diameter_distance(redmapper[i]["Z"])).value * u.kpc * 1000
-        x,y = (x - center[0])*pixel_width, (y - center[1])*pixel_width
-        cluster = sz_cluster(
-            np.rad2deg(ra[i]),
-            np.rad2deg(dec[i]),
-            redmapper[i]["LAMBDA_CHISQ"],
-            redmapper[i]["LAMBDA_CHISQ_E"],
-            R,
-            smap,
-            smask,
-            redmapper[i]["Z"],
-            redmapper[i]["Z_LAMBDA_E"],
-            box,
-            redmapper[i]["MEM_MATCH_ID"]
-        )
-        if cluster.MASK_FLAG == True:
-            continue
-        cluster.theta = theta
-        cluster.x = x * u.arcmin
-        cluster.y = y * u.arcmin
-        cluster.generate_profile(r=R_profiles)
-        cluster.output_path = (
-            data_path
-            + config["FILES"]["INDIVIDUAL_CLUSTERS_PATH"]
-            + "redmapper_ID="
-            + str(redmapper[i]["MEM_MATCH_ID"])
-        )
-        cluster.ID = redmapper[i]["MEM_MATCH_ID"]
-        cluster.save_and_plot(plot=True, force=True)
-        if i in rm_indices:
-            match_indice = np.where(rm_indices == i)
-            cluster.match(dr5[dr5_indices[match_indice]])
-            cluster.save_match()
-        else:
-            cluster.matched = False
-        if match_agn:
-            if i in rm_agn_indices:
-                match_indices = np.where(rm_agn_indices == i)
-                cluster.agn(agn[agn_indices[match_indices]])
-                cluster.save_agn()
-                cluster.save_and_plot(plot=True, force=True)
-        clusters.append(cluster)
-    if richness_range is not None:
-        warnings.filterwarnings("default", category=RuntimeWarning)
-        t2 = time()
-        print(f"richness interval {richness_range} was finish in {t2 - t1} seconds.")
-        return clusters
-    grouped = np.sum(clusters)
-    return grouped
-
 #@check_none
 class sz_cluster:
     def __init__(
@@ -269,7 +144,7 @@ class sz_cluster:
         richness,
         richness_error,
         r,
-        szmap,
+        imap,
         mask,
         z,
         z_err,
@@ -283,7 +158,7 @@ class sz_cluster:
             self.richness = richness
             self.richness_err = richness_error
             self.cluster_radius = r
-            self.szmap = np.copy(szmap)
+            self.imap = np.copy(imap)
             self.mask = np.copy(mask)
             self.box = np.copy(box)
             self.z = float(z)
@@ -295,7 +170,7 @@ class sz_cluster:
                 + "redmapper_ID="
                 + str(self.ID)
             )
-            self.total_SNr_map = np.mean(self.szmap) ** 2 / np.std(self.szmap) ** 2
+            self.total_SNr_map = np.mean(self.imap) ** 2 / np.std(self.imap) ** 2
             if os.path.exists(self.output_path) == False:
                 os.mkdir(self.output_path)
         else:
@@ -363,7 +238,7 @@ class sz_cluster:
             except AttributeError as e:
                 print("AttributeError: '{}' object has no attribute '{}'".format(type(e).__name__, e.args[0].split("'")[1]))
     def plot(self, save = False, add_circles = False, plot_signal_centroid = False, imshow_unit = "arcmin",
-            plot_signal = False, r_units = "arcmin", patchsize = 0.8, pixel_size = 0.5, signal_propt = "szmap",
+            plot_signal = False, r_units = "arcmin", patchsize = 0.8, pixel_size = 0.5, signal_propt = "imap",
             show_cluster_information = None, cluster_information_names = None, show_contours = True,
             output = None, **kwargs):
         default_fig_kwargs = (
@@ -478,7 +353,7 @@ class sz_cluster:
         pd.DataFrame(about_cluster, index=[0]).to_csv(
                 f"{self.output_path}/about_redmapper_ID={self.ID}.csv"
             )
-        np.save(f"{self.output_path}/szmap.npy", self.szmap)
+        np.save(f"{self.output_path}/imap.npy", self.imap)
         np.save(f"{self.output_path}/mask.npy", self.mask)
         np.save(f"{self.output_path}/box.npy", self.box)
         if hasattr(self, "profile") == True:
@@ -504,7 +379,7 @@ class sz_cluster:
                 raise Empty_Data("The cluster_data is totally empty!")
             else:
                 theta = self.theta
-                data = self.szmap
+                data = self.imap
                 R_bins, profile, err, data = radial_binning(data, r, wcs = wcs)
                 SNr = np.array([profile[i]/err[i] for i in range(len(err))])
                 circles = []  # circles in the plot
@@ -534,7 +409,7 @@ class sz_cluster:
                     self.richness = other_data.loc[0]["richness"]
                     self.z = other_data.loc[0]["redshift"]
                     self.total_SNr = other_data.loc[0]["total_SNr"]
-                    self.szmap = np.load(self.output_path+"/szmap.npy")
+                    self.imap = np.load(self.output_path+"/imap.npy")
                     self.mask = np.load(self.output_path+"/mask.npy")
                     self.box = np.load(self.output_path+"/box.npy")
             if "match.csv" in os.listdir(self.output_path):
@@ -548,7 +423,7 @@ class sz_cluster:
 * (RA,DEC): \033[92m({self.RA},{self.DEC}\033[0m)
 * richness: \033[92m{self.richness}\033[0m
 * redshift: \033[92m{self.z}\033[0m
-* szmap shape: \033[92m{np.shape(self.szmap)}\033[0m
+* imap shape: \033[92m{np.shape(self.imap)}\033[0m
 * mask flag value: \033[92m{self.MASK_FLAG}\033[0m
 * output path: \033[92m{self.output_path}\033[0m
 * DR5 : \033[92m{dr5}\033[0m
@@ -559,7 +434,7 @@ class sz_cluster:
 * (RA,DEC): \033[92m({self.RA},{self.DEC}\033[0m)
 * richness: \033[92m{self.richness}\033[0m
 * redshift: \033[92m{self.z}\033[0m
-* szmap shape: \033[92m{np.shape(self.szmap)}\033[0m
+* imap shape: \033[92m{np.shape(self.imap)}\033[0m
 * mask flag value: \033[92m{self.MASK_FLAG}\033[0m
 * output path: \033[92m{self.output_path}\033[0m
 * DR5 : \033[92m{dr5}\033[0m
@@ -589,7 +464,7 @@ class sz_cluster:
             [self.richness_err, other.richness_err],
             [self.z_err, other.z_err],
             [self.mask, other.mask],
-            [self.szmap, other.szmap],
+            [self.imap, other.imap],
             [self.RA, other.RA],
             [self.DEC, other.DEC],
             [self.ID, other.ID],
@@ -605,7 +480,7 @@ class sz_cluster:
             else:
                 return 0
             dr = np.where(r < R)
-            ydr = self.szmap[dr]
+            ydr = self.imap[dr]
             Y = cosmo.angular_diameter_distance(self.z)**(-2) * simps(ydr)
             dr = r[dr].flatten()
             h = dr[0] - dr[1]
@@ -636,10 +511,10 @@ class sz_cluster:
             output.richness_err = df["richness_err"][0]
             output.z = df["redshift"][0]
             output.z_err = df["redshift_err"][0]
-            output.szmap = np.load(f"{output.output_path}/szmap.npy")
+            output.imap = np.load(f"{output.output_path}/imap.npy")
             output.mask = np.load(f"{output.output_path}/mask.npy")
             output.box = np.load(f"{output.output_path}/box.npy")
-            smap = output.szmap
+            smap = output.imap
             shape = np.shape(smap)
             center = shape[0]//2, shape[1]//2
             pixel_width = np.rad2deg(width) / np.shape(smap)[0] * 60
@@ -651,8 +526,35 @@ class sz_cluster:
             return output
         else:
             return None
-#@check_none
-class grouped_clusters:
+
+class AutoCastAttr:
+    def __init__(self, dtype=np.float32, **kwargs):
+
+        super().__setattr__('dtype', dtype)
+
+        for name, val in kwargs.items():
+            setattr(self, name, val)
+
+    def __setattr__(self, name, val):
+
+        try: 
+            if name == 'dtype' or name.startswith('_'):
+                return super().__setattr__(name, val)
+
+            dt = object.__getattribute__(self, 'dtype')
+
+            if isinstance(val, np.ndarray):
+                val = val.astype(dt)
+            elif isinstance(val, Sequence) and not isinstance(val, str):
+                if all(isinstance(x, numbers.Number) for x in val):
+                    val = np.array(val, dtype=dt)
+            elif isinstance(val, numbers.Number):
+                val = dt(val)
+            return super().__setattr__(name, val)
+        except:
+            return super().__setattr__(name, val)
+
+class grouped_clusters(AutoCastAttr):
     def __init__(
         self,
         R,
@@ -666,13 +568,18 @@ class grouped_clusters:
         richness_err = [],
         z_err = [],
         mask = [],
-        szmap = [],
+        imap = [],
         ra = [],
         dec = [],
         ID = [],
         box = [],
         output_path = None,
+        dtype = np.float32,
+        **kwargs
     ):
+        super().__init__(dtype=dtype, **kwargs)
+
+        self.dtype = dtype 
         self.R = R
         self.theta = theta
         self.x = x
@@ -698,8 +605,8 @@ class grouped_clusters:
         self.mask = (
             mask.tolist() if isinstance(mask, np.ndarray) else mask or []
         )
-        self.szmap = (
-            szmap.tolist() if isinstance(szmap, np.ndarray) else szmap or []
+        self.imap = (
+            imap.tolist() if isinstance(imap, np.ndarray) else imap or []
         )
         self.ra = (
             ra.tolist() if isinstance(ra, np.ndarray) else ra or []
@@ -733,17 +640,18 @@ class grouped_clusters:
                 self.output_path = ""
                 self.N = 0
     @classmethod
-    def load_from_path(self, path, load_from_h5 = True):
-        c = self.empty()
+    def load_from_path(self, path, load_from_h5 = True, dtype = np.float32):
+        c = self.empty(dtype = dtype)
         c.output_path = path
         if load_from_h5 == True:
             c.load_from_h5()
             c.output_path = path
         return c
     @classmethod
-    def empty(self):
+    def empty(self, dtype = np.float32):
         arguments = list(inspect.signature(self.__init__).parameters.keys())[1::]
         dic = {n:None for n in arguments}
+        dic["dtype"] = dtype
         return self(**dic)
     def load_correlation_matrix(self, corr_file, format = "npy"):
         if format == "npy":
@@ -769,7 +677,7 @@ class grouped_clusters:
                 [other.richness_err],
                 [other.z_err],
                 [other.mask],
-                [other.szmap],
+                [other.imap],
                 [other.RA],
                 [other.DEC],
                 [other.ID],
@@ -788,9 +696,9 @@ class grouped_clusters:
         except:
             new_mask = [[],[]]
         try:
-            new_szmap = self.szmap + other.szmap
+            new_imap = self.imap + other.imap
         except:
-            new_szmap = [[],[]]
+            new_imap = [[],[]]
         new_ra = list(self.ra) + list(other.ra)
         new_dec = list(self.dec) + list(other.dec)
         new_ID = list(self.ID) + list(other.ID)
@@ -810,7 +718,7 @@ class grouped_clusters:
             new_richness_err,
             new_redshift_err,
             new_mask,
-            new_szmap,
+            new_imap,
             new_ra,
             new_dec,
             new_ID,
@@ -844,14 +752,14 @@ class grouped_clusters:
                 self.richness[i],
                 self.richness_err[i],
                 self.R,
-                self.szmap[i] if len(self.szmap) > 1 else [],
+                self.imap[i] if len(self.imap) > 1 else [],
                 self.mask[i] if len(self.mask) > 1 else [],
                 self.z[i],
                 self.z_err[i],
                 self.box[i] if len(self.box) > 1 else [],
                 self.ID[i] if len(self.ID) > 1 else [],
             )
-            smap = self.szmap[i]
+            smap = self.imap[i]
             shape = np.shape(smap)
             center = shape[0]//2, shape[1]//2
             pixel_width = np.rad2deg(width) / np.shape(smap)[0] * 60
@@ -882,7 +790,7 @@ class grouped_clusters:
                                 self.richness[i],
                                 self.richness_err[i],
                                 self.R,
-                                self.szmap[i] if len(self.szmap) > 1 else [],
+                                self.imap[i] if len(self.imap) > 1 else [],
                                 self.mask[i] if len(self.mask) > 1 else [],
                                 self.z[i],
                                 self.z_err[i],
@@ -890,7 +798,7 @@ class grouped_clusters:
                                 self.ID[i] if len(self.ID) > 1 else [],
 
                             ))
-                            smap = self.szmap[i]
+                            smap = self.imap[i]
                             shape = np.shape(smap)
                             center = shape[0]//2, shape[1]//2
                             pixel_width = np.rad2deg(width) / np.shape(smap)[0] * 60
@@ -915,14 +823,14 @@ class grouped_clusters:
                         self.richness[i],
                         self.richness_err[i],
                         self.R,
-                        self.szmap[i] if len(self.szmap) > 1 else [],
+                        self.imap[i] if len(self.imap) > 1 else [],
                         self.mask[i] if len(self.mask) > 1 else [],
                         self.z[i],
                         self.z_err[i],
                         self.box[i] if len(self.box) > 1 else [],
                         self.ID[i] if len(self.ID) > 1 else [], 
                     ))
-                    smap = self.szmap[i]
+                    smap = self.imap[i]
                     shape = np.shape(smap)
                     center = shape[0]//2, shape[1]//2
                     pixel_width = np.rad2deg(width) / np.shape(smap)[0] * 60
@@ -971,19 +879,19 @@ class grouped_clusters:
         
         if return_results == True:
             return idx1,idx2, sep2d, _
-    def map_of_matched(self, catalog, indx, wcs, match_img, box_size = 1, share_plot = True, szmap = None, contour_map = True, output = None, **kwargs):
+    def map_of_matched(self, catalog, indx, wcs, match_img, box_size = 1, share_plot = True, imap = None, contour_map = True, output = None, **kwargs):
         match = self.match_dict[catalog]
         ra_match, dec_match = match["RA"][indx], match["DEC"][indx]
         indx_cluster = match["match_idx2"][indx]
         ra_cluster, dec_cluster = self.ra[indx_cluster], self.dec[indx_cluster]
         print(f"(RA, DEC) cluster = {ra_cluster},{dec_cluster}")
         print(f"(RA, DEC) match = {ra_match},{dec_match}")
-        if hasattr(self, "szmap") == False or len(self.szmap) <= 1:
-            if szmap is not None:
+        if hasattr(self, "imap") == False or len(self.imap) <= 1:
+            if imap is not None:
                 box = [[dec_match.value - box_size/2, ra_match.value - box_size/2], [dec_match.value + box_size/2, ra_match.value + box_size/2]]
-                smap = szmap.submap(np.deg2rad(box))
+                smap = imap.submap(np.deg2rad(box))
         else:
-            smap = self.szmap[indx_cluster]
+            smap = self.imap[indx_cluster]
         box = [[dec_match.value - box_size/2, ra_match.value - box_size/2], [dec_match.value + box_size/2, ra_match.value + box_size/2]]
         N,M = np.shape(match_img)[0],np.shape(match_img)[1]
         px,py = np.arange(1, N + 1), np.arange(1, M + 1)
@@ -1152,7 +1060,7 @@ class grouped_clusters:
             max_richness = np.round(max(self.richness)) if max_richness is None else max_richness
             richness = np.arange(np.floor(min_richness), max_richness + 1, 1, dtype = int)
             rounded_richness = np.round(self.richness)
-            sorted_maps = np.array(self.szmap)[sorted_indices]
+            sorted_maps = np.array(self.imap)[sorted_indices]
             sorted_z = np.array(self.z)[sorted_indices]
             interval = [richness[0], richness[1]]
             #iter = tqdm(range(1, len(richness) + int(rdistance), int(rdistance)), desc = "Spliting data using richness.") if pool is None else range(1, len(richness) + int(rdistance), int(rdistance))
@@ -1163,6 +1071,7 @@ class grouped_clusters:
             print("Spliting sample in richness:")
             print("*min richness = ", min_richness)
             print("*richness intervals = ", richness_intervals)
+            print("*redshift intervals = ", redshift_bins) if redshift_bins is not None else None
             print("*SNr = ",SNr)
             g_last = None
             for i in range(1,len(richness_intervals)):
@@ -1243,26 +1152,33 @@ class grouped_clusters:
                     if np.any(np.array([len(gsi) for gsi in gs]) < 20) == True:
                         continue
                     for j in range(len(gs)):
-                        gs[j].stacking(R_profiles, plot = False, width = width, N_realizations = N_realizations, use_corr_matrix = True, pool = pool,
-                                    bootstrap = use_bootstrap, save = False, estimate_background = estimate_background)
+                        print(f"current redshift bin = [{z1}, {z2}]")
+
+                        gs[j].output_path = "/".join(self.output_path.split("/")[0:-2]) + "/" + r"l%.i-%.i_z%.2f-%.2f" % (
+                                min(gs[j].richness), max(gs[j].richness), min(gs[j].z), max(gs[j].z))
+                        gs[j].richness_bin = np.array(interval)
+                        gs[j].redshift_bin = np.array([z1, z2])
+                        gs[j].stacking(R_profiles, plot = True, width = width, N_realizations = N_realizations, n_pool = n_pool,
+                                        bootstrap = use_bootstrap, save = True, estimate_background = False
+                                        , use_cov_matrix = use_cov_matrix, use_corr_matrix = use_corr_matrix,
+                                        compute_zero_level = compute_zero_level, clusters_mask = clusters_mask,
+                                        estimate_covariance = estimate_covariance, ymap = ymap, mask = mask,
+                                         weighted = weighted)
                         cov = gs[j].cov
                         prof = np.array(gs[j].mean_profile)
                         snr = np.sqrt(np.dot(np.dot(prof, np.linalg.inv(cov)), prof.T))
                         snrs.append(snr)
                         print(f"SNR {j + 1} = {snr}")
                         if i >= len(richness):
+                            print("Saving to ", gs[j].output_path)
                             gs[j].plot()
                             gs[j].save()
-                            gs[j].stacking(only_plot = True)
                             continue 
-
                     if np.all(np.array(snrs) >= SNr) and i <= len(richness):
                         for j in range(len(gs)):
-                            gs[j].output_path = "/".join(self.output_path.split("/")[0:-2]) + "/" + r"l%.i-%.i_z%.2f-%.2f" % (
-                                min(gs[j].richness), max(gs[j].richness), min(gs[j].z), max(gs[j].z))
+                            print("Saving to ", gs[j].output_path)
                             gs[j].plot()
                             gs[j].save()
-                            gs[j].stacking(only_plot = True)
                         interval[0] = richness[i]
                 else:
                     smap = sorted_maps[richness_cut]
@@ -1327,6 +1243,60 @@ class grouped_clusters:
             new_group.output_path = str("/".join(str(self.output_path).split("/")[0:-1]) + "/" + r"l%.i-%.i_z%.2f-%.2f" % (
                                 min(new_group.richness), max(new_group.richness), min(new_group.z), max(new_group.z)))
         return new_group
+    def binning(self, r=None, shape=None, wcs=None, units="arcmin", edges=False, replace=False):
+        r = self.R if hasattr(self, "R") else r
+
+        if units != 'rad':
+            conversion = (1 + (59 * (units[:3] == 'arc'))) * (1 + (59 * (units == 'arcsec')))
+            conversion = np.pi / 180 / conversion
+            r = r * conversion
+        else:
+            conversion = 1.0
+        if edges is False:
+            r_edges = (r[:-1] + r[1:]) / 2
+            r_first = r[0] - (r[1] - r[0]) / 2
+            r_last  = r[-1] + (r[-1] - r[-2]) / 2
+            r = np.concatenate(([r_first], r_edges, [r_last]))
+
+        r_centers = (r[1:] + r[:-1]) / 2
+        nbins = len(r_centers)
+
+        shape = self.imap[0].shape if hasattr(self, "imap") else shape
+        wcs = self.wcs if hasattr(self, "wcs") else wcs
+
+        imaps = np.asarray(self.imap)      
+        flat_maps = imaps.reshape(imaps.shape[0], -1) 
+
+        modrmap = enmap.zeros(shape, wcs).modrmap()
+        digitized_all = np.digitize(modrmap.ravel(), r) - 1 
+
+        valid = (digitized_all >= 0) & (digitized_all < nbins)
+        digitized = digitized_all[valid]   
+
+        sums = np.vstack([
+            np.bincount(digitized, weights=flat_map_i[valid], minlength=nbins)
+            for flat_map_i in flat_maps
+        ])  
+
+        sums2 = np.vstack([
+            np.bincount(digitized, weights=(flat_map_i[valid]**2), minlength=nbins)
+            for flat_map_i in flat_maps
+        ])  
+
+        counts = np.bincount(digitized, minlength=nbins)  
+
+        means = sums / np.maximum(counts, 1)
+        variances = sums2 / np.maximum(counts, 1) - means**2
+        variances = np.maximum(variances, 0.0)
+        stds = np.sqrt(variances)
+
+        if replace:
+            self.profiles = means
+            self.errors = stds
+
+        r_centers = r_centers / conversion
+        return r_centers, means, stds
+
     def discard_by_R(self, rmin = None, rmax = None, replace = False, return_results = False, plot_comparison = False, **kwargs):
         rmin = np.min(self.R) if rmin is None else rmin
         rmax = np.max(self.R) if rmax is None else rmax
@@ -1345,6 +1315,13 @@ class grouped_clusters:
             cov = np.array(self.cov)[:,rmask][rmask,:]
         else:
             cov = None
+        if hasattr(self, "random_profiles_cov"):
+            self.random_profiles_cov = self.random_profiles_cov[:,:, rmask]
+        if hasattr(self, "random_cov_matrices"):
+            self.random_cov_matrices = self.random_cov_matrices[:,rmask,:][:,:,rmask]
+        if hasattr(self, "random_corr_matrices"):
+            self.random_corr_matrices = self.random_corr_matrices[:,rmask,:][:,:,rmask]
+
         if plot_comparison:
             ri,rf = np.min(self.richness),np.max(self.richness)
             zi,zf = np.min(self.z),np.max(self.z)
@@ -1413,13 +1390,13 @@ class grouped_clusters:
             elif hasattr(self, "output_path") == False:
                 print("You must define an output path first")
     def compute_covariance_matrices(self, R_profiles, width):
-        maps = self.szmap
+        maps = self.imap
         covs = compute_covariance_per_map(maps, R_profiles, width)
         self.covs = covs
         
-    def load_map(self, szmap, maptype = "pixell", boxwidth = 1):
+    def load_map(self, imap, maptype = "pixell", boxwidth = 1):
         if maptype == "pixell":
-            self.szmap = []
+            self.imap = []
             dec,ra = self.dec, self.ra
             dec = np.deg2rad(dec)
             ra = np.deg2rad(ra)
@@ -1429,8 +1406,8 @@ class grouped_clusters:
                 [dec[i] - width / 2.0, ra[i] - width / 2.0],
                 [dec[i] + width / 2.0, ra[i] + width / 2.0],
                 ]
-                smap = szmap.submap(box)
-                self.szmap.append(smap)
+                smap = imap.submap(box)
+                self.imap.append(smap)
     def compute_diffc_matrix(self, use_sz_centroids = True, use_matchs = True):
         diffc_matrices = []
         if hasattr(self, "centroids_sz") == True:
@@ -1506,9 +1483,9 @@ class grouped_clusters:
                         new_match_dict[k].append(smatch[k][n])
     def estimate_centroids_sz(self, inner_r = 5, width = 0.8, compute_diff = False):
         self.centroids_sz = []
-        if hasattr(self, "szmap"):
-            for i in range(len(self.szmap)):
-                smap = self.szmap[i]
+        if hasattr(self, "imap"):
+            for i in range(len(self.imap)):
+                smap = self.imap[i]
                 rai,deci = self.ra[i],self.dec[i]
                 pixel_width = width / np.shape(smap)[0] #in deg
                 x,y = np.indices(np.shape(smap))
@@ -1552,8 +1529,8 @@ class grouped_clusters:
             elif rescale == True:
                 sigma = self.error_in_mean
     def compute_zero_level(self, rmin = 10, rmax = 15, check_first = False, **kwargs):
-        if hasattr(self, "szmap") == False:
-            raise Exception("You must load the szmap first.")
+        if hasattr(self, "imap") == False:
+            raise Exception("You must load the imap first.")
         if hasattr(self, "R") == False:
             raise Exception("You must define the R first.")
         if hasattr(self, "mean_profile") == False:
@@ -1572,17 +1549,23 @@ class grouped_clusters:
         self.zero_level_err = zero_level_err
         self.mean_profile = self.mean_profile - zero_level
     def stacking(self, R_profiles = [100,200,300], plot = True, weighted = False, only_plot = False, estimate_covariance = True,
-                 use_shared_memory = False, background_err = True, ymap = None, mask = None, width = 0.8, bootstrap = False, 
+                 use_shared_memory = False, background_err = False, ymap = None, mask = None, width = 0.8, bootstrap = False, 
                  save = True, clusters_mask = None, wcs = None, corrm2covm = False, reproject_maps = True, N_realizations = 1000,
-                 n_pool = 1, verbose = True, compute_zero_level = True, mask_format = "healpy", convert_maps2global = True, **kwargs):
-
+                 n_pool = 1, verbose = True, compute_zero_level = False, mask_format = "healpy", convert_maps2global = True, 
+                 **kwargs):
+        print(20*"=")
+        print("Running Stacking...")
+        print(f"richness = [{np.min(self.richness)}, {np.max(self.richness)}]")
+        print(f"redshift = [{np.min(self.z)}, {np.max(self.z)}]")
+        print(f"N clusters = {len(self)}")
+        print(20*"=")
         default_background_err_kwargs = (
                 ("N_total", 100),
                 ("N_clusters", None),
                 ("ymap", "/data2/javierurrutia/szeffect/data/ilc_SZ_yy.fits"),
                 ("mask", "/data2/javierurrutia/szeffect/data/wide_mask_GAL070_apod_1.50_deg_wExtended.fits"),
                 ("clusters_mask", "/data2/javierurrutia/szeffect/data/DES_ACT-footprint_unmasked_clusters.fits"),
-                ("use_redshift", True),
+                ("use_redshift", False),
                 ("corr_matrix", True),
                 ("min_sep", 1.6)
         )      
@@ -1595,7 +1578,7 @@ class grouped_clusters:
         )
 
         default_covariance_estimation_kwargs = (
-            ("N_total", 200),
+            ("N_total", 100),
             ("N_realizations", None),
             ("unbiased-factor", False),
             ("min_sep", None),
@@ -1604,22 +1587,26 @@ class grouped_clusters:
             ("save_coords", True),
             ("compute-individual-covs", False),
             ("weighted", True),
+            ("store_SNR", True),
+            ("check_convergence", True),
+            ("convergence_threshold", 0.05)
         )
 
         default_zero_level_kwargs = (
             ("rmin", 10),
             ("rmax", 15),
-            ("check_first", False)
+            ("check_first",True)
         )
 
         default_weights_kwargs = (
             ("use_SNr", False),
             ("use_inverse_variance", False),
-            ("use_function", True),
+            ("use_function", False),
             ("func", lambda x,a: x**a),
             ("vars", ["richness"]),
             ("params", [0.38]),
-            ("reliability_weights",  False)
+            ("reliability_weights",  False),
+            ("use_richness_weights_and_sigma", True)
         )
 
         bootstrap_kwargs = set_default(kwargs.pop("bootstrap_kwargs", {}), default_bootstrap_kwargs)
@@ -1627,19 +1614,22 @@ class grouped_clusters:
         zero_level_kwargs = set_default(kwargs.pop("zero_level_kwargs", {}), default_zero_level_kwargs)
         covariance_estimation_kwargs = set_default(kwargs.pop("covariance_estimation_kwargs", {}), default_covariance_estimation_kwargs)
         weights_kwargs = set_default(kwargs.pop("weights_kwargs", {}), default_weights_kwargs)
-        ymap = enmap.read_map(background_err_kwargs["ymap"]) if ymap is None else ymap
-        mask = enmap.read_map(background_err_kwargs["mask"]) if mask is None else mask
-        clusters_mask = hp.fitsfunc.read_map(background_err_kwargs["clusters_mask"]) if clusters_mask is None else clusters_mask
-
-        R_bins = np.array([(R_profiles[i] + R_profiles[i + 1])/2 for i in range(len(R_profiles) - 1)])
-        print(f"Running stacking algorithm with {n_pool} N_cores") if n_pool > 1 else None
+        
         if os.path.exists(self.output_path) == False and save == True:
             os.mkdir(self.output_path)
         if only_plot == False:
-            maps_array = np.array(self.szmap)
+            if ymap is None or mask is None or clusters_mask is None:
+                self.load_map_and_mask()
+                ymap = self.map
+                mask = self.mask
+                clusters_mask = self.clusters_mask
+
+            R_bins = np.array([(R_profiles[i] + R_profiles[i + 1])/2 for i in range(len(R_profiles) - 1)])
+            print(f"Running stacking algorithm with {n_pool} N_cores") if n_pool > 1 else None
+            maps_array = np.array(self.imap)
             wcs = wcs if wcs is not None else ymap.wcs
 
-            if background_err == True:
+            if background_err == True and "background.npy" not in os.listdir(self.output_path):
                 rmin, rmax, dmin, dmax = np.min(self.ra), np.max(self.ra), np.min(self.dec), np.max(self.dec)
                 Nclusters = len(self.richness) if background_err_kwargs["N_clusters"] is None else background_err_kwargs["N_clusters"]
                 N_total = int(np.ceil(len(self.richness)/500) * 500) if background_err_kwargs["N_total"] is None else background_err_kwargs["N_total"] 
@@ -1648,7 +1638,7 @@ class grouped_clusters:
 
                 if n_pool == 1:
                     if verbose:
-                        print(f"Runing background estimation error using {N_total} realizations with {Nclusters} clusters replicas.")
+                        print(f"Running background estimation error using {N_total} realizations with {Nclusters} clusters replicas.")
                         progress_bar = tqdm(desc = "Estimating background error", total = N_total)
                     while len(random_profiles) < N_total:
                         new_maps = []
@@ -1680,21 +1670,26 @@ class grouped_clusters:
                 elif n_pool > 1:
                     with Pool(n_pool, initializer=init_random_worker, initargs=(ymap, clusters_mask)) as pool:
                         if verbose == True:
-                            print(f"Estimating background error using {background_err_kwargs['N_total']} random realizations each with {Nclusters}.")
+                            print(f"Estimating background error using {background_err_kwargs['N_total']} random realizations each with {Nclusters} replicas.")
                             print(f"Running background estimator with {pool._processes} cores!")
                         manager = Manager()
                         counter = manager.Value("i", 0)
                         N_base = N_total // n_pool
                         N_remainder = N_total % n_pool
                         iter_per_core = [N_base + 1 if i < N_remainder else N_base for i in range(n_pool)]
+                        min_sep = background_err_kwargs["min_sep"]
                         #args = [(np.asarray(ymap), np.asarray(mask), np.asarray(clusters_mask), R_profiles, width, wcs, reproject_maps, p, 
                         #            Nclusters, rmin, rmax, dmin, dmax, N_total, coords, None, i) for i,p in enumerate(iter_per_core)]
                         #res = pool.starmap(random_worker, args)
                         res_ = []
                         for i in range(len(iter_per_core)):
-                            res_.append(pool.apply_async(random_worker, args = (None, None, R_profiles, width, wcs, 
-                                                reproject_maps, iter_per_core[i], Nclusters, Nclusters, rmin, rmax, dmin, dmax, N_total//3, 
-                                                N_total, None, i, counter, mask_format, False, None, False, None, True)))
+                            kwds = dict(ymap = None, mask = None, R_profiles = R_profiles, width = width, wcs = wcs, reproject_maps = reproject_maps, 
+                                N_random = iter_per_core[i], Ncl = len(self.richness), N_clusters = len(self.richness), rmin = rmin, rmax = rmax, 
+                                dmin = dmin, dmax = dmax, random_coord_size = N_total//3, N_total = N_total, min_sep = min_sep, 
+                                worker_id = i, counter = counter, mask_format = mask_format, compute_individual_matrices = False, 
+                                save_coords = False, weights = None, return_patches = True, dtype = self.dtype)
+
+                            res_.append(pool.apply_async(random_worker, kwds = kwds))
 
                         res = [r.get() for r in res_]
                         background_maps_list = [r[0] for r in res]
@@ -1704,15 +1699,19 @@ class grouped_clusters:
                         background = np.mean(background_maps, axis = (0,1))
                         pool.close()
                         pool.join()
+                        np.save(f"{self.output_path}/background.npy", background)
                         del background_maps_list, res, background_maps, background_profiles_list
                         print("\n","="*30,"\n")
                 self.background_field = background
                 self.background_profiles = background_profiles
                 if background_err_kwargs["corr_matrix"] == True:
                     self.corr_matrix_background = np.corrcoef(random_profiles, rowvar = False)
-
+            elif "background.npy" in os.listdir(self.output_path):
+                background = np.load(f"{self.output_path}/background.npy")
+                self.background_field = background
             if weighted == True:
                 weighted_map = maps_array
+                w_mask = np.sum(self.mask, axis = (1,2))
                 if weights_kwargs["use_SNr"] == True:
                     snrs = np.sum(self.profiles, axis = 1)/np.sqrt(np.sum(self.errors**2, axis = 1)) if hasattr(self, "covs") == False else np.sqrt(
                         np.einsum('ni,nij->n', self.profiles, np.linalg.solve(self.covs, self.profiles[..., None])))
@@ -1727,11 +1726,21 @@ class grouped_clusters:
                     data_vec = data_vec[0] if len(data_vec) == 1 else data_vec
                     params = weights_kwargs["params"]
                     weights = func(data_vec, *params) if hasattr(self, "weights") == False else self.weights
+                elif weights_kwargs["use_richness_weights_and_sigma"] == True:
+                    richness_err = self.richness_err if hasattr(self, "richness_err") else None
+                    if richness_err is not None:
+                        weights = 1/(richness_err**2 + np.sum(self.errors**2, axis = 1)) * w_mask
+                        self.weights = weights
+                    else:
+                        print("Using inverse variance to compute weights. richness_err attribute not found.")
+                        weights = 1/np.sum(self.errors**2, axis = 1) * w_mask
                 if hasattr(self, "weights") == False:
                     self.weights = weights
                 if weights_kwargs["reliability_weights"] == True:
                     V1 = np.sum(self.weights)
                     self.weights = weights/V1
+
+                self_stacked_map_unweighted = np.average(maps_array, axis = 0)
                 self.stacked_map = np.average(weighted_map, axis = 0, weights = weights) - self.background_field if hasattr(self, "background_field") else np.average(weighted_map, axis = 0, weights = weights)
                 self.stacked_errors = np.std(maps_array, axis = 0)
             else:
@@ -1852,18 +1861,22 @@ class grouped_clusters:
                         for i in range(len(iter_per_core)):
                             res_.append(pool.apply_async(random_worker, args = (ymap_input, clusters_mask_input, R_profiles, width, wcs, 
                                                     reproject_maps, iter_per_core[i], len(self.richness), N_realizations, rmin, rmax, dmin, dmax, N_total//3,     
-                                                    N_total, coords, None, i, counter, mask_format, dtype, save_coords, weights)))
+                                                    N_total, coords, None, i, counter, mask_format, self.dtype, save_coords, weights)))
                         shm_ymap.close()
                         shm_ymap.unlink()
                         shm_mask.close()
                         shm_mask.unlink()
                     elif use_shared_memory == False and convert_maps2global == True:
-
                         pool = Pool(n_pool, initializer=init_random_worker, initargs=(ymap, clusters_mask))
+                        
                         for i in range(len(iter_per_core)):
-                            res_.append(pool.apply_async(random_worker, args = (None, None, R_profiles, width, wcs, 
-                                                    reproject_maps, iter_per_core[i], len(self.richness), N_realizations, rmin, rmax, dmin, dmax, N_total//3,     
-                                                    N_total, min_sep*60, i, counter, mask_format, compute_individual_covs, None, save_coords, weights)))
+                            kwds = dict(ymap = None, mask = None, R_profiles = R_profiles, width = width, wcs = wcs, reproject_maps = reproject_maps, 
+                            N_random = iter_per_core[i], Ncl = len(self.richness), N_clusters = N_realizations, rmin = rmin, rmax = rmax, 
+                            dmin = dmin, dmax = dmax, random_coord_size = N_total//3, N_total = N_total, min_sep = min_sep, 
+                            worker_id = i, counter = counter, mask_format = mask_format, compute_individual_matrices = compute_individual_covs, 
+                            save_coords = save_coords, weights = weights, return_patches = False, dtype = self.dtype)
+                            
+                            res_.append(pool.apply_async(random_worker, kwds = kwds))
                     else:
                         pool = Pool(n_pool)
                         for i in range(len(iter_per_core)):
@@ -1878,20 +1891,93 @@ class grouped_clusters:
                     cov_matrices_list = [r[0] for r in res]
                     mean_profiles_list = [r[1] for r in res]
                     random_profiles_list = [r[2] for r in res]
+                    if weights is not None:
+                        random_weights_list = [r[3] for r in res]
                     if covariance_estimation_kwargs["save_coords"] == True:
-                        coords_list = [r[3] for r in res]
+                        coords_list = [r[-1] for r in res]
                         rcoords = np.concatenate(coords_list)
                         self.coords_random_maps = rcoords
+
                     cov_matrices = np.concatenate(cov_matrices_list, axis = 0).astype(float)
                     corr_matrices = np.zeros(np.shape(cov_matrices))
                     for n,c in enumerate(cov_matrices):
                         sigma = np.sqrt(np.diag(c))
                         corr_matrices[n] = cov_matrices[n]/np.outer(sigma,sigma)
                     
-                    mean_profiles = np.concatenate(mean_profiles_list, axis = 0).astype(float)
-                    random_profiles = np.concatenate(random_profiles_list, axis = 0).astype(float)
-                    cov = np.median(cov_matrices, axis = 0).astype(float)
-                    corr = np.median(corr_matrices, axis = 0).astype(float)
+                    mean_profiles = np.concatenate(mean_profiles_list, axis = 0).astype(self.dtype)
+                    random_profiles = np.concatenate(random_profiles_list, axis = 0).astype(self.dtype)
+                    random_weights = np.concatenate(random_weights_list, axis = 0).astype(self.dtype)
+                                        
+                    if covariance_estimation_kwargs["check_convergence"] == True:
+                        pad = 10
+                        snri = np.zeros(len(cov_matrices) - pad, dtype = self.dtype)
+                        Nr = np.shape(random_profiles)[-1]
+                        cov_realizations = np.zeros((len(cov_matrices), Nr, Nr), dtype = self.dtype)
+                        n_realizations = np.arange(pad, len(cov_matrices))
+                        diff = []
+                        for k,N in enumerate(n_realizations):
+                            idx = np.random.choice(np.arange(len(cov_matrices)), size = N).astype(int)
+                            random_profiles_i = random_profiles[idx, ...]
+                            random_weights_i = random_weights[idx, ...]
+                            cov_matrices_i = np.zeros((N, Nr, Nr ), dtype = self.dtype)
+                            for n in range(len(random_profiles_i)):
+                                P = random_profiles_i[n]
+                                W = random_weights_i[n]
+                                Wsum = np.sum(W, axis = 0)
+                                mu = (np.sum(P*W , axis = 0) / Wsum)
+                                dev = P - mu[None,:]
+                                for i in range(Nr):
+                                    Wmi = W[:,i]
+                                    Di = dev[:,i]
+                                    for j in range(Nr):
+                                        Wnj = W[:,j]
+                                        Dj = dev[:,j]
+                                        num = np.sum(Wnj * Wmi * Di * Dj)
+                                        Wij = Wnj * Wmi
+                                        V1  = np.sum(Wij)
+                                        V2  = np.sum(Wij * Wij)
+                                        denom = V1 - V2 / V1
+                                        cov_matrices_i[n, i, j ] = num/denom
+                                        if np.isnan(cov_matrices_i[n,i,j]) == True or np.isfinite(cov_matrices_i[n,i,j]) == False:
+                                            cov_matrices_i[n, i, j ] = 0
+                            cov_realizations[k] = np.nanmedian(cov_matrices_i, axis = 0).astype(self.dtype)
+                            if k > 1:
+                                d = np.abs((cov_realizations[k] - cov_realizations[k - 1])/cov_realizations[k - 1])
+                                diff.append(np.mean(d))
+                            else:
+                                diff.append(0.5)
+                            snr = np.sqrt(np.dot(profile, np.dot(np.linalg.inv(cov_realizations[k]), profile.T)))
+                            snri[k] = snr
+                        diff = np.array(diff)
+                        fig, ax = plt.subplots(figsize = (12,6))
+                        snr2 = gaussian_filter1d(snri, sigma = 3)
+                        ax.plot(n_realizations ,snr2, lw = 3, color = "darkgreen")
+                        ax.set(xlabel = "Number of realizations", ylabel = "SNR", title = "Convergence check")
+                        fig.savefig(self.output_path + "/snr_convergence_check.png", dpi = 200)
+                        fig, ax = plt.subplots(figsize = (12,6))
+                        diff2 = gaussian_filter1d(diff, sigma = 3)
+                        ax.plot(n_realizations ,diff2, lw = 3, color = "darkgreen")
+                        ax.set(xlabel = "Number of realizations", ylabel = r"$\langle |(C_{i} - C_{i - 1})/C_{i - 1}| \rangle$", title = "Difference between realizations")
+                        fig.savefig(self.output_path + "/diff_convergence_check.png", dpi = 200)
+                        if np.any(diff < 0.05):
+                            conv = np.where(diff < 0.05)[0][0]
+                            print("Converged at %i realizations" % (np.argmin(diff) + 1))
+                            ax.fill_between(n_realizations[conv:], 0, diff.max(), color = "darkgreen", alpha = 0.2)
+                            after_conv_realizations = n_realizations[conv:]
+                            after_conv_diff = diff[conv:]
+                            saturated = np.where(after_conv_diff > 0.1)[0]
+                            if len(saturated) > 0:
+                                saturated_realizations = after_conv_realizations[saturated[0]:]
+                                saturated_diff = after_conv_diff[saturated[0]:]
+                                ax.fill_between(after_conv_realizations[:saturated[0]], 0, diff.max(), color = "darkred", alpha = 0.2)
+                        fig.savefig(self.output_path + "/diff_convergence_check.png", dpi = 200)
+
+                        self.diff_realizations = diff   
+                        self.snr_realizations = snri
+
+                    cov = np.median(cov_matrices, axis = 0).astype(self.dtype)
+                    corr = np.median(corr_matrices, axis = 0).astype(self.dtype)
+
                 if covariance_estimation_kwargs["unbiased-factor"] == True:
                     Nb = np.shape(cov)[0]
                     self.cov = (N_realizations - 1)/(N_realizations - 2 - Nb)*cov
@@ -1936,7 +2022,7 @@ class grouped_clusters:
                     #         progress_bar.update(1)
                 elif n_pool > 1:
                     indx = np.random.choice(np.arange(0, len(maps_array), 1), replace = True, size = (N, N_clusters))
-                    maps = self.szmap[indx]
+                    maps = self.imap[indx]
                     pool = Pool(n_pool)
                     counter = manager.Value("i", 0)
                     maps_per_core = np.array_split(maps, n_pool, axis = 0)
@@ -2267,7 +2353,7 @@ class grouped_clusters:
                         ax.plot(self.R, np.full(len(self.R), self.zero_level), label = "zero level value", color = "darkred", alpha = 0.6, ls = "--", lw = 2)
                 ax.legend()
                 fig.savefig(self.output_path + "/mean_profile.png")
-    def save(self, file_format = "h5"):
+    def save(self, file_format = "h5", dtype = np.float32):
         if hasattr(self, "mean_profile"):
             output_data = np.zeros((3, len(self.mean_profile)))
             output_data[0] = self.R
@@ -2278,23 +2364,40 @@ class grouped_clusters:
             available_data = list(self.__dict__.keys())
             with h5py.File(f"{self.output_path}/data.h5", "w") as f:
                 for k in available_data:
-                    try:
-                        f.create_dataset(k, data = getattr(self, k))
-                    except ValueError:
-                        dt = h5py.special_dtype(vlen=float)
-                        f.create_dataset(k, data = getattr(self, k), dtype = dt)
-                    except:
+                    if k != "dtype" and k != "wcs":
                         try:
-                            f.create_dataset(k, data = getattr(self, np.array(k, dtype = str)), dtype = str)
-                        except:
+                            if type(getattr(self, k)) is float:
+                                f.create_dataset(k, data = getattr(self, k), dtype = dtype)
+                            elif type(getattr(self, k)) is str:
+                                f.create_dataset(k, data = str(getattr(self, k)), dtype = str)
+                            else:
+                                if getattr(self, k) is not None:
+                                    f.create_dataset(k, data = getattr(self, k), dtype = getattr(self, k).dtype)
+                        except ValueError:
+                            dt = h5py.special_dtype(vlen=float) if type(k) == float else h5py.special_dtype(vlen=str)
+                            f.create_dataset(k, data = getattr(self, k), dtype = dt)
+                        except AttributeError:
+                            f.create_dataset(k, data = getattr(self, k))
+                            try:
+                                f.create_dataset(k, data = getattr(self, np.array(k, dtype = str)), dtype = str)
+                            except:
+                                print(f"An exception has ocurred trying to store {k} attribute!")
+                        except TypeError:
                             print(f"An exception has ocurred trying to store {k} attribute!")
+                            continue
                         pass
+                    elif k == "wcs":
+                        wcs = getattr(self, k)
+                        header_str = wcs.to_header().tostring(sep="\n")
+                        dt = h5py.string_dtype(encoding="utf-8")       # <--- important
+                        f.create_dataset("wcs_header", data=header_str, dtype=dt)
     def mass_richness_func(self, pivot=40, slope=1.29, normalization=10**14.45):
         return lambda l: (normalization * (l / pivot) ** slope)
 
     def completeness_and_halo_func(self, plot = False, zbins = 6, Mbins = 5, verbose = False, relationship_config = "MASS-RICHNESS RELATIONSHIP",
                                   static = True, use_lambda_obs = None, interpolate = False, cmap = "Purples", interp_imshow = "nearest", smooth = None, 
-                                  text_color = "black", use_redshift = False, r_method = "mean", zlambda2zobs = False, **kwargs):
+                                  text_color = "black", use_redshift = True, r_method = "mean", zlambda2zobs = True,
+                                  delta = 500, background = "critical", load_from_file = False, **kwargs):
         """
         Computes the completeness and halo mass function for the stacked halo model.
         Parameters
@@ -2342,6 +2445,17 @@ class grouped_clusters:
                 "RegularGridInterpolator" and "cubic" respectively.
                 methods available are "griddata", "RectBivariateSpline", or "RegularGridInterpolator".
                 N_interp is the number of points to use for interpolation, default value is set to 100.
+            function_kwargs : dict, optional
+                Additional keyword arguments for the direct function evaluation of completeness. It contains the next keys:
+                    Nlambda_true : int, optional
+                        Number of true richness values to use for completeness calculation. Default is 30.
+                    Nlambda_obs : int, optional
+                        Number of observed richness values to use for completeness calculation. Default is 50.
+                    Nz_lambda : int, optional
+                        Number of redshift values to use for completeness calculation. Default is 30.
+                    function : str, optional
+                        Completeness function in helpers.py file. As default the function is set to 'P_lob_ltr' from Constazi et al 2019.
+                        It must have the next syntax: completeness_function(lambda_obs, lambda_true, z, **kwargs)
         Returns
         -------
         None    
@@ -2350,7 +2464,7 @@ class grouped_clusters:
         #As default the richness to mass relation is set to the one obtained in McClintock et al 2019, on the other 
         #hand for the mass to richness relation is used the derived in Costanzi et al 2019.
         default_completeness_kwargs = (
-            ("completeness_file", "/data2/cristobal/actpol/lensing/cmblensing/des/selection/completeness_des.txt"),
+            ("completeness_file", "/data2/javierurrutia/szeffect/codes/selection/completeness_des.txt"),
             ("richness2mass_Norm", 10**14.489),
             ("richness2mass_Pivot", 40),
             ("richness2mass_Slope", 1.356),
@@ -2365,14 +2479,25 @@ class grouped_clusters:
             ("pmr_distribution", "log-normal"),
         )
 
-
+        default_function_kwargs = (
+            ("Nlambda_true", 50),
+            ("max_lambda_true", 350),
+            ("min_lambda_true", 10),
+            ("Nlambda_obs", 30),
+            ("Nz_lambda", zbins),
+            ("function", 'P_lob_ltr'),
+            ("func_kwags", {})
+        )
 
         completeness_kwargs = set_default(kwargs.pop("completeness_kwargs",{}), default_completeness_kwargs)
-        
+        function_kwargs = set_default(kwargs.pop("function_kwargs",{}), default_function_kwargs)
         default_Pzlambda_kwargs = (
             ("func", "dirac"),
             ("z_lambda", None),
         )
+        ic(function_kwargs)
+        if verbose == True:
+            print("Creating completeness and halo-mass function")
 
         default_interpolation_kwargs = (
             ("interpolation_method", "RegularGridInterpolator"),
@@ -2386,14 +2511,6 @@ class grouped_clusters:
         interpolation_kwargs = set_default(kwargs.pop("interpolation_kwargs",{}), default_interpolation_kwargs)
         
         Pzlambda_kwargs = set_default(kwargs.pop("Pzlambda_kwargs",{}), default_Pzlambda_kwargs)
-        completeness_file = completeness_kwargs["completeness_file"]
-
-
-
-        if not os.path.exists(completeness_file):
-            raise FileNotFoundError(f"The completeness file {completeness_file} does not exist.")
-        else:
-            print(f"Loading completeness from {completeness_file}.")
         #parameters that converts from richness to mass
         richness2mass_Norm = completeness_kwargs["richness2mass_Norm"]
         richness2mass_Pivot = completeness_kwargs["richness2mass_Pivot"]
@@ -2411,53 +2528,103 @@ class grouped_clusters:
 
         sigmaRM = completeness_kwargs["sigmaRM"]
         pmr_distribution = completeness_kwargs["pmr_distribution"]
-
-        df = pd.read_csv(completeness_file, delimiter = "|", usecols = (1,2,3,4))
-        df.columns = df.columns.str.strip()
-        df = df.applymap(lambda x: x.strip() if isinstance(x, str) else x)
-        z_arr = np.unique(df["z"]) #z true from completeness file
-        if use_lambda_obs is not None:  
-            if use_lambda_obs== True:
-                mask1 = df["l_obs"] >= np.min(self.richness)
-                mask2 = df["l_obs"] <= np.max(self.richness)
-                df = df[mask1 & mask2].copy()
-            elif np.iterable(use_lambda_obs) == True:
-                mask1 = df["l_obs"] >= use_lambda_obs[0]
-                mask2 = df["l_obs"] <= use_lambda_obs[1]
-                df = df[mask1 & mask2].copy() 
-        if use_redshift == False:         
-            print("Computing probability distribution considering only the mean redshift!")         
-            if r_method == "median":
-                ref_redshift = np.median(self.z)
-            elif r_method == "weighted_median":
-                ref_redshift = weighted_median(self.z, self.richness)
+        
+        if load_from_file == True:
+            completeness_file = completeness_kwargs["completeness_file"]
+            if not os.path.exists(completeness_file):
+                raise FileNotFoundError(f"The completeness file {completeness_file} does not exist.")
             else:
-                ref_redshift = np.mean(self.z)
-            if "z" in df.columns:
-                closest_redshift = np.unique(df["z"])[np.argmin(np.abs(np.unique(df["z"]) - ref_redshift))]
-                mask = df["z"] == closest_redshift
-                df2 = df[mask].copy()
-                df2 = df2.drop(columns = "z")
-            else:
-                df2 = df.copy()
-            probs = df2.pivot(index = "l_true", columns = "l_obs", values = "P(l_obs)")
-            lambda_obs = probs.columns.values
-            lambda_true = probs.index.values
-            prob_distribution = probs.values
-        else:
-            print("Computing probability distribution considering redshift bins!")
-            prob_distribution = np.zeros((len(np.unique(df["l_true"])), len(np.unique(df["l_obs"])), len(z_arr)))
-            lambda_true_vals = np.unique(df["l_true"])
-            lambda_obs_vals = np.unique(df["l_obs"])
-            for i,z in enumerate(z_arr):
-                mask = df["z"] == z
-                df2 = df[mask].copy()
-                df2 = df2.drop(columns = "z")
+                if verbose:
+                   print(f"Loading completeness from {completeness_file}.")
+            df = pd.read_csv(completeness_file, delimiter = "|", usecols = (1,2,3,4))
+            df.columns = df.columns.str.strip()
+            df = df.applymap(lambda x: x.strip() if isinstance(x, str) else x)
+            z_arr = np.unique(df["z"]) #z true from completeness file
+            if use_lambda_obs is not None:  
+                if use_lambda_obs== True:
+                    mask1 = df["l_obs"] >= self.richness_bin[0]
+                    mask2 = df["l_obs"] <= self.richness_bin[1]
+                    if verbose:
+                        print("Using lambda obs = [%.i, %.i]" % (self.richness_bin[0], self.richness_bin[1]))
+                    df = df[mask1 & mask2].copy()
+                elif np.iterable(use_lambda_obs) == True:
+                    mask1 = df["l_obs"] >= use_lambda_obs[0]
+                    mask2 = df["l_obs"] <= use_lambda_obs[1]
+                    df = df[mask1 & mask2].copy() 
+            if use_redshift == False:                 
+                if r_method == "median":
+                    ref_redshift = np.median(self.z)
+                elif r_method == "weighted_median":
+                    ref_redshift = weighted_median(self.z, self.richness)
+                else:
+                    ref_redshift = np.mean(self.z)
+                if "z" in df.columns:
+                    closest_redshift = np.unique(df["z"])[np.argmin(np.abs(np.unique(df["z"]) - ref_redshift))]
+                    mask = df["z"] == closest_redshift
+                    df2 = df[mask].copy()
+                    df2 = df2.drop(columns = "z")
+                else:
+                    df2 = df.copy()
                 probs = df2.pivot(index = "l_true", columns = "l_obs", values = "P(l_obs)")
-                probs = probs.reindex(index=lambda_true_vals, columns=lambda_obs_vals, fill_value=0)
                 lambda_obs = probs.columns.values
                 lambda_true = probs.index.values
-                prob_distribution[:,:,i] = probs.values
+                prob_distribution = probs.values
+                if verbose:
+                    ic(lambda_obs.shape)
+                    ic(lambda_true.shape)
+                    ic(prob_distribution.shape)
+            else:
+                if zlambda2zobs == True and Pzlambda_kwargs["func"] == "dirac":
+                    if verbose:
+                        print("Using redshift obs = [%.1f, %.1f]" % (self.redshift_bin[0], self.redshift_bin[1]))
+                    mask1 = df["z"] >= self.redshift_bin[0]
+                    mask2 = df["z"] <= self.redshift_bin[1]
+                    df = df[mask1 & mask2]
+                    z_arr = z_arr[np.where((z_arr >= self.redshift_bin[0]) & (z_arr <= self.redshift_bin[1]))]
+                prob_distribution = np.zeros((len(np.unique(df["l_true"])), len(np.unique(df["l_obs"])), len(z_arr)))
+                lambda_true_vals = np.unique(df["l_true"])
+                lambda_obs_vals = np.unique(df["l_obs"])
+                for i,z in enumerate(z_arr):
+                    mask = df["z"] == z
+                    df2 = df[mask].copy()
+                    df2 = df2.drop(columns = "z")
+                    probs = df2.pivot(index = "l_true", columns = "l_obs", values = "P(l_obs)")
+                    probs = probs.reindex(index=lambda_true_vals, columns=lambda_obs_vals, fill_value=0)
+                    lambda_obs = probs.columns.values
+                    lambda_true = probs.index.values
+                    prob_distribution[:,:,i] = probs.values
+        else:
+            helpers = importlib.import_module("helpers")
+            print("Evaluating completeness from function")
+            Nlambda_true = function_kwargs["Nlambda_true"]
+            Nlambda_obs = function_kwargs["Nlambda_obs"]
+            Nz_lambda = function_kwargs["Nz_lambda"]
+            f = getattr(helpers, function_kwargs["function"])
+            kf = function_kwargs["func_kwags"]
+            lambda_true = np.linspace(function_kwargs["min_lambda_true"], function_kwargs["max_lambda_true"], Nlambda_true).astype(int)
+            if use_lambda_obs is None:
+                lambda_obs = np.linspace(function_kwargs["min_lambda_obs"], function_kwargs["max_lambda_obs"], Nlambda_obs).astype(int)
+            elif use_lambda_obs == True:
+                lambda_obs = np.linspace(self.richness_bin[0], self.richness_bin[1], Nlambda_obs)
+            elif np.iterable(use_lambda_obs):
+                lambda_obs = np.linspace(use_lambda_obs[0], use_lambda_obs[1], Nlambda_obs)
+            if use_redshift == False:
+                z_arr = np.linspace(function_kwargs["min_z"], function_kwargs["max_z"], Nz_lambda)
+            else:
+                z_arr = np.linspace(self.redshift_bin[0], self.redshift_bin[1], Nz_lambda)
+            ic(lambda_obs.min(), lambda_obs.max(), np.shape(lambda_obs))
+            ic(lambda_true.min(), lambda_true.max(), np.shape(lambda_true))
+            ic(z_arr.min(), z_arr.max(), np.shape(z_arr))
+            ic(function_kwargs["function"])
+            ic(kf)
+            lambda_true_grid, lambda_obs_grid, z_arr_grid = np.meshgrid(lambda_true, lambda_obs, z_arr, indexing = "ij")
+            prob_distribution = f(lambda_true_grid, lambda_obs_grid, z_arr_grid, **kf)
+
+        if verbose:
+            ic(prob_distribution.shape)
+            ic(lambda_obs.shape)
+            ic(lambda_true.shape)
+            ic(z_arr.shape)
         if interpolate == True:
             interpolation_method = interpolation_kwargs["interpolation_method"]
             method = interpolation_kwargs["method"]
@@ -2467,7 +2634,6 @@ class grouped_clusters:
             lambda_obs_interp = lambda_obs
             z_arr_interp = np.linspace(np.min(z_arr), np.max(z_arr), N_interp)
             if interpolation_method == "RegularGridInterpolator":
-                print("Using RegularGridInterpolator for interpolation!")
                 if use_redshift == False:
                     interp_func = RegularGridInterpolator(
                         (lambda_true, lambda_obs), 
@@ -2512,19 +2678,21 @@ class grouped_clusters:
                     print(f"Interpolated data saved to {output_file}")
         if zlambda2zobs == True:    
             if Pzlambda_kwargs["func"] == "dirac":
-                print("Assuming a Dirac delta function for P(z_lambda| z)!")
+                if verbose:
+                    print("Assuming a Dirac delta function for P(z_lambda| z)!")
                 z_lambda = self.z #observed redshift (i.e z_lambda)
                 z_arr = z_arr[np.where((z_arr >= np.min(z_lambda)) & (z_arr <= np.max(z_lambda)))]
+                prob_distribution = prob_distribution[:, :, np.where((z_arr >= np.min(z_lambda)) & (z_arr <= np.max(z_lambda)))[0]]
             else:
                 z_lambda = Pzlambda_kwargs["z_lambda"] if Pzlambda_kwargs["z_lambda"] is not None else np.arange(self.z.min(), self.z.max() + 0.05, 0.05)
                 self.z_lambda = z_lambda
                 Pzlambda_func = Pzlambda_kwargs["func"]
                 z_lambda_grid, z_arr_grid = np.meshgrid(z_lambda, z_arr, indexing = "ij")
                 Pzlambda_z = Pzlambda_func(z_lambda_grid, z_arr_grid) #P(z_lambda| z)
-
         if smooth is not None:
             prob_distribution = gaussian_filter(prob_distribution, smooth)
 
+        print(20*"=") if verbose else None
         Plambda_true = np.array(prob_distribution) # P(lambda_obs | lambda_true)
         self.Plambda_true = Plambda_true #shape (len(lambda_true), len(lambda_obs))
         self.lambda_obs = lambda_obs #observed richness ==> [richness_min, richness_max]
@@ -2532,6 +2700,14 @@ class grouped_clusters:
         M = np.logspace(13, 15.75, Mbins) #mass interval ==> [13, 15.75]
         self.M = M #halo mass bins
         self.z_arr = z_arr #redshift bins
+
+        if verbose:
+            print("Final shapes")
+            ic(Plambda_true.shape)
+            ic(M.shape)
+            ic(z_arr.shape)
+            ic(lambda_obs.shape)
+            ic(lambda_true.shape)
 
         self.completeness_kwargs = completeness_kwargs
         if use_redshift == True:
@@ -2568,67 +2744,95 @@ class grouped_clusters:
         self.lambda_model = lambda_model
         #Compute halo mass function 
         cosm = ccl.Cosmology(**cosmological_model) #cosmological model
-        mdef = ccl.halos.massdef.MassDef(500, "critical")
+        mdef = ccl.halos.massdef.MassDef(delta, background)
         a = 1 / (1 + z_arr)
         mfunc = ccl.halos.mass_function_from_name("Tinker10") #mass function from Tinker et al 2010
         mfunc = mfunc(cosm, mdef)
         dndM = np.array([[mfunc(cosm, mi, ai) for mi in M ] for ai in a]) #dN/dM
         dndM = dndM * 1/(M * np.log(10)) #convert from log10
         self.dndM = dndM
-
+        print(20*"==")
+        if verbose:
+            ic(Plambda_obs_M.shape)
+            ic(PllM.shape)
+            ic(P_Mass.shape)
+            ic(Plambda_true_Mass.shape)
+            ic(pmr_distribution)
+            ic(dndM.shape)
         if plot == True:
-            fig, ax = plt.subplots(figsize = (12,8))
-            ax.imshow(P_mass, norm = LogNorm(vmin = 1e-5), interpolation = "gaussian", 
-                cmap = cmap, origin = "lower", 
-                extent = (mass_arr.min(), mass_arr.max(), lambda_true.min(), lambda_true.max()))
-            ax.set(xscale = "log", yscale = "linear", xlabel = r"Mass $M_{\odot}$", ylabel = r"$\lambda_{\mathrm{true}}$"
-                , title = r"Probability Function $P(\lambda_{\mathrm{true}}|M)$")
-            ax.set_aspect("auto")
-            fig.savefig(self.output_path + "/Pmass.png")
-
+            from plottery.plotutils import update_rcParams
+            update_rcParams()
+            from mpl_toolkits.axes_grid1.inset_locator import inset_axes
             fig, ax = plt.subplots(figsize = (12,12))
-            ax.imshow(prob_distribution, norm = LogNorm(vmin = 1e-7), cmap = "coolwarm", origin = "lower", 
-            interpolation = "gaussian",
-            extent = [lambda_true.min(), lambda_true.max(),lambda_obs.min(), lambda_obs.max()])
-            ax.set_aspect("auto")
-            fig.savefig(self.output_path + "/P(lambda_true|lambda_obs).png")
-            
-            indx = np.argmin(np.abs(lambda_true - 45))
-            fig, (ax1,ax2) = plt.subplots(2,1,figsize = (14,14))
-            im = ax1.imshow(np.abs(P_true),interpolation=interp_imshow,origin='lower', norm = LogNorm(vmin = 1e-3),
-                    cmap = cmap,
-                    extent=(lambda_obs.min(), lambda_obs.max() ,lambda_true.min(), lambda_true.max()))
-            plt.colorbar(im,label=r'$P(\lambda_{\mathrm{obs}}| \lambda_{\mathrm{true}})$',ax=ax1)
-            richness_ref = 45
-            ax1.axvline(x = richness_ref, ls = "--", lw = 3, color = "blue")
-            axins = ax1.inset_axes([0.65, 0.25, 0.3, 0.3])
-            axins.plot(lambda_obs[0:150], np.abs(prob_distribution)[indx, 0:150], color = "purple")
-            axins.set_yticks([])
-            axins.set_xlabel("richness $\lambda_{\mathrm{obs}}$")
-            axins.set_title(r"$P(\lambda_{\mathrm{obs}}|\lambda_{\mathrm{true}} = %.i)$" % richness_ref, fontsize = 16)
-            ax1.set(title=r'Probability function $P(\lambda_{\mathrm{obs}}|\lambda_{\mathrm{true}}, z = %.2f)$' % round(closest_redshift,2),
-                    xlabel=r'$\lambda_{\mathrm{obs}}$', ylabel=r'$\lambda_{\mathrm{true}}$')
-            im = ax2.imshow(np.abs(P_obs).T, origin = "lower", cmap = cmap, interpolation = interp_imshow, 
-                    norm = LogNorm(vmin = 1e-3),
-                    extent = (mass.min(), mass.max(), lambda_obs.min(), lambda_obs.max()))
-            plt.colorbar(im,label=r'$P(\lambda_{\mathrm{obs}}| M_{\odot})$',ax=ax2)
-            ax2.set(title=r'Probability function $P(\lambda_{\mathrm{obs}}| M_{\odot}, z = %.2f)$' % round(closest_redshift,2),
-                    ylabel=r'$\lambda_{\mathrm{obs}}$', xlabel=r'$M_{\odot}$')
-            # ax2.axhline(20, ls = "--", lw = 3, color = "green")  
-            axins = ax2.inset_axes([0.1, 0.60, 0.3, 0.3])
-            P_detection = np.cumsum(P_MR)
-            P_detection /= P_detection[-1]
-            axins.plot(mass_arr, P_detection, color = "purple")
-            axins.set_yticks([])
-            axins.set_xlabel(r"$M_{\odot}$")
-            axins.set(xscale = "log")
-            axins.set_title(r"$P$ detection $P(M>)=\int_{0}^{M} dM\int d\lambda_{\mathrm{obs}} P(\lambda_{\mathrm{obs}}|M)$", fontsize = 16)
-            ax2.set_xscale("log")
-            #ax2.set_yscale("log")
-            ax1.set_aspect('auto')
-            ax2.set_aspect('auto')
-            fig.tight_layout()
-            fig.savefig(f"{self.output_path}/Prob.png")
+            if use_redshift == True:
+                print("Plotting P(lambda_true|lambda_obs,z)")
+                robs_bin = input("min and max richness obs to plot = ").split(",")
+                if len(robs_bin) == 1:
+                    robs_min, robs_max = lambda_obs.min(), lambda_obs.max()
+                else:
+                    robs_min, robs_max = np.array(robs_bin, dtype = float)
+                rtrue_bin = input("min and max richness true to plot = ").split(",")
+                if len(rtrue_bin) == 1:
+                    rtrue_min, rtrue_max = lambda_true.min(), lambda_true.max()
+                else:
+                    rtrue_min, rtrue_max = np.array(rtrue_bin, dtype = float)
+
+                idx_obs = np.logical_and(lambda_obs >= robs_min, lambda_obs <= robs_max)
+                idx_true = np.logical_and(lambda_true >= rtrue_min, lambda_true <= rtrue_max)
+
+                lambda_true = lambda_true[idx_true]
+                lambda_obs = lambda_obs[idx_obs]
+
+                z_ref = float(input("z ref to plot = "))
+                idx_z = np.argmin(np.abs(z_arr - z_ref))
+                z_ref = z_arr[idx_z]
+                idx = np.array(idx_obs[None,:]*idx_true[:,None], dtype = bool)
+                Plambda_true_z = Plambda_true[:,:, idx_z][idx].reshape((len(lambda_true), len(lambda_obs)))
+                im = ax.imshow(Plambda_true_z, norm = LogNorm(vmin = 1e5*np.min(Plambda_true_z)), origin = "lower", aspect = "auto", cmap = "Purples",
+                    extent = (lambda_true.min(), lambda_true.max(), lambda_obs.min(), lambda_obs.max()))
+                lambda_true_ref = 25
+                idx_r = np.argmin(np.abs(lambda_true - lambda_true_ref))
+                axins = inset_axes(ax, loc = "lower right", borderpad = 5, width="30%", height="30%")
+                axins.plot(lambda_obs, np.log10(Plambda_true_z[lambda_true_ref,:]+1e-20), label = r"$\lambda_{\text{true}} = %.2f$" %lambda_true_ref)
+                axins.set_xlabel(r"richness observed $\lambda_{\text{obs}}$", fontsize = 12) 
+                axins.set_ylabel(r"$\log_{10}{P}$", fontsize = 12)
+                axins.set_title(r"$P(\lambda_{\text{obs}} | \lambda_{\text{true}} = %.i, z = %.2f)$" %(lambda_true_ref, z_ref), fontweight = "bold", fontsize = 14)
+                ax.set(ylabel = r"richness true $\lambda_{\text{true}}$", xlabel = r"richness observed $\lambda_{\text{obs}}$")
+                fig.suptitle(r"$P(\lambda_{\text{obs}} | \lambda_{\text{true}}, M, z = %.2f)$" %z_ref, fontweight = "bold", fontsize = 30)
+                ax.axvline(lambda_true_ref, lw = 3, alpha = 0.5, color = 'purple', ls = "--")
+                cbar = plt.colorbar(im)
+                cbar.set_label(r"$P(\lambda_{\text{true}} | \lambda_{\text{obs}}, z = %.2f)$" %z_ref, fontsize = 12)
+                print("Saving to " + self.output_path + "/PllM_z%.2f.png" %z_ref)
+                fig.savefig(self.output_path + "/PllM_z%.2f.png" %z_ref)
+                print(20*"==")
+                print("Plotting P(M|z)")
+                z_ref = 0.22
+                idx_z = np.argmin(np.abs(z_arr - z_ref))
+                z_ref = z_arr[idx_z]
+                fig, ax = plt.subplots(figsize = (14,10))
+                cmap = getattr(plt.cm, "Reds")
+                norm = plt.Normalize(np.min(z_arr), np.max(z_arr))
+                for i in range(len(z_arr)):
+                    ax.plot(M, np.cumsum(P_Mass[:,i])/np.cumsum(P_Mass[:,i])[-1], alpha = np.clip(z_arr[i]/np.median(z_arr), 0.2, 1)
+                        ,color = cmap(norm(z_arr[i])), lw = 1)
+                sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+                cbar = plt.colorbar(sm, cax=fig.add_axes([0.92, 0.1, 0.02, 0.8]))
+                ax.set(xlabel = r"Mass $[\mathrm{M}_{\odot}]$", ylabel = r"$P(M | z)$", xscale = "log", yscale = "linear")
+                cbar.set_label("z")
+                fig.suptitle(r"$P(M | z)$", fontweight = "bold", fontsize = 30)
+                print("Saving to " + self.output_path + "/P_Mass.png")
+                fig.savefig(self.output_path + "/P_Mass.png")
+            else:
+                ax.imshow(Plambda_true, norm = LogNorm(vmin = 1e5*np.min(Plambda_true)), origin = "lower", aspect = "auto", cmap = "Purples",
+                    extent = (lambda_true.min(), lambda_true.max(), lambda_obs.min(), lambda_obs.max()))
+                ax.set(ylabel = r"richness true $\lambda_{\text{true}}$", xlabel = r"richness observed $\lambda_{\text{obs}}$")
+                fig.suptitle(r"$P(\lambda_{\text{obs}} | \lambda_{\text{true}}, M)$", fontweight = "bold", fontsize = 30)
+                print("Saving to " + self.output_path + "/PllM.png")
+                fig.savefig(self.output_path + "/PllM.png")
+
+
+            pass
+
     def compute_pivots(self, weights = None, verbose = False):
         weights = self.richness if weights is None else weights
         richness_pivot = weighted_median(self.richness, weights)
@@ -2636,14 +2840,48 @@ class grouped_clusters:
         if verbose:
             print("recommended pivots:")
             print("richness:", richness_pivot)
-            print("redshift", redshift_pivot)    
+            print("redshift", redshift_pivot) 
+    def load_map_and_mask(self, use_pixell = True, use_healpix = False, clusters_mask_format = 'healpy'):
+        if use_pixell:
+            m = enmap.read_map(self.map_path) if hasattr(self, "map_path") else enmap.zeros()
+            mask = enmap.read_map(self.mask_path) if hasattr(self, "mask_path") else enmap.zeros(m.shape, m.wcs)
+        elif use_healpix:
+            m = hp.read_map(self.map_path)
+            mask = hp.read_map(self.mask_path)
+        
+
+        clusters_mask = hp.fitsfunc.read(self.clusters_mask_path) if clusters_mask_format == 'healpy' else enmap.read_map(self.clusters_mask_path)
+        
+        self.map = m.astype(self.dtype)
+        self.mask = mask.astype(self.dtype)
+        self.clusters_mask = clusters_mask.astype(self.dtype)
+        return m, mask, clusters_mask
     def stacked_halo_model_func(self, one_halo_profile,units = "arcmin", pix_size = 0.5, rbins = 25, zbins = 11, Mbins = 10,
                                 filters = None, use_filters = False, use_two_halo_term = False, fixed_RM_relationship = True,
                                 rebinning = False , mis_centering = False,  interpolate_2halo = False, eval_lambda = False,
                                 two_halo_profile = None, redshift_weight_function = False, richness_weight_function = False,
-                                mis_centering_func = lambda x,sigma: x/sigma**2*np.exp(-x**2/(2*sigma**2)),
-                                **kwargs):    
+                                mis_centering_func = lambda x,sigma: x/sigma**2*np.exp(-x**2/(2*sigma**2)), verbose = True,
+                                delta = 500, background = "critical", pyccl_cosmo = None, eval_mass = False, 
+                                apply_filter_per_profile = False, return_1h2h = False, infere_mass = False,
+                                redshift_pivot = 0.4737, richness_pivot = 32.68, weighted = True, 
+                                subr_grid = True, **kwargs):   
+
         from astropy.cosmology import Planck18 as planck18
+
+        float_dtype = self.dtype
+        if verbose:
+            print(10*"=")
+            print("Creating a new stacked halo model func to grouped clusters:\n")
+            self.stats()
+
+        default_mass_inf_kwargs = (
+            ("is_kappa", True),
+            ("use_therm_EQ", False),
+            ("use_function", False),
+            ("func", None),
+            ("interpolate", True),
+            ("Nr", 50),
+        )
 
         default_compl_kwargs = (
             ("zbins", zbins),
@@ -2651,12 +2889,16 @@ class grouped_clusters:
             ("interpolate", False),
             ("use_lambda_obs", True),
             ("use_redshift", True),
+            ("background", background),
+            ("delta", delta),
+            ("verbose", verbose)
             )
+
         default_rebinning_kwargs = (
             ("nbins", 50),
-            ("rmin", 1e-3),
-            ("pixel_size", 0.5),
-            ("method", "interpolate")
+            ("method", 'interp1d'),
+            ("pixel_size", 0.01),
+            ("interpolation_kwargs", dict(kind='cubic', bounds_error=False, fill_value=0))
         )
 
         default_mis_centering_kwargs = (
@@ -2667,13 +2909,17 @@ class grouped_clusters:
         )
 
         default_two_halo_kwargs = (
-            ("background", "critical"),
+            ("background", background),
             ("R", np.logspace(-1, 1.7, 20)),
             ("k", np.logspace(-15,15, 50)),
             ("M_arr", np.logspace(13,16, 20)),
             ("z_arr", np.linspace(1e-3,1, 20)),
             ("cosmo", ccl.CosmologyVanillaLCDM()),
-            ("delta", 500)    
+            ("delta", delta),
+            ("two_halo_power_func", lambda z, params: np.full(z.shape,params[0])),
+            ("eval_only_mass", False),
+            ("eval_only_richness", False),
+            ("eval_only_redshift", True),    
         )
 
         default_weights_function_kwargs = (
@@ -2691,27 +2937,38 @@ class grouped_clusters:
 
         )
 
+        default_subr_grid_kwargs = (
+            ("rmin", 0.1),
+            ("rmax", 15),
+            ("n" , 20)
+        )
+
         two_halo_kwargs = set_default(kwargs.pop("two_halo_kwargs", {}), default_two_halo_kwargs)
         compl_kwargs = set_default(kwargs.pop("completeness_kwargs", {}), default_compl_kwargs)
         mis_centering_kwargs = set_default(kwargs.pop("mis_centering_kwargs", {}), default_mis_centering_kwargs)
         rebinning_kwargs = set_default(kwargs.pop("rebinning_kwargs", {}), default_rebinning_kwargs)
         weights_function_kwargs = set_default(kwargs.pop("weights_function_kwargs", {}),default_weights_function_kwargs)
         richness_weights_function_kwargs = set_default(kwargs.pop("richness_weights_function_kwargs",{}), default_richness_weights_function_kwargs)
-
         two_halo_profile = one_halo_profile if two_halo_profile is None else two_halo_model
-
+        mass_inf_kwargs = set_default(kwargs.pop("mass_inf_kwargs", {}), default_mass_inf_kwargs)
+        subr_grid_kwargs = set_default(kwargs.pop("subr_grid_kwargs", {}), default_subr_grid_kwargs)
         #pre-compute completeness and halo mass function
         use_redshift = compl_kwargs["use_redshift"]
-        self.completeness_and_halo_func(**compl_kwargs)
-        
-        PllM = self.PllM # P(lambda_true | lambda_obs, M, z)
-        P_Mass = self.P_Mass # P(M) or P(M|z)
-        dndM = self.dndM # dN/dM(M,z)
-        Plambda_obs_M = self.Plambda_obs_M # P(lambda_obs | M)
-        M = self.M # halo mass bins
-        z_arr = self.z_arr # redshift bins
-        lambda_obs = self.lambda_obs
-        lambda_true = self.lambda_true # true richness bins
+        if hasattr(self, "completeness_kwargs") == False:
+            self.completeness_and_halo_func(**compl_kwargs)
+        else:
+            cond = [compl_kwargs[k] == v for k,v in self.completeness_kwargs.items() if k in list(compl_kwargs.keys())]
+            if np.any(cond == False):
+                self.completeness_and_halo_func(**compl_kwargs)
+
+        PllM = self.PllM.astype(float_dtype) # P(lambda_true | lambda_obs, M, z)
+        P_Mass = self.P_Mass.astype(float_dtype) # P(M) or P(M|z)
+        dndM = self.dndM.astype(float_dtype) # dN/dM(M,z)
+        Plambda_obs_M = self.Plambda_obs_M.astype(float_dtype) # P(lambda_obs | M)
+        M = self.M.astype(float_dtype) # halo mass bins
+        z_arr = self.z_arr.astype(float_dtype) # redshift bins
+        lambda_obs = self.lambda_obs.astype(float_dtype)
+        lambda_true = self.lambda_true.astype(float_dtype) # true richness bins
 
         #Mass to richness params (power law)
         mass2richness_Norm = self.completeness_kwargs["mass2richness_Norm"]
@@ -2720,12 +2977,14 @@ class grouped_clusters:
         mass2richness_Slope_redshift = self.completeness_kwargs["mass2richness_Slope_redshift"]
         mass2richness_Pivot_redshift = self.completeness_kwargs["mass2richness_Pivot_redshift"]
         
-
         sigmaRM = self.sigmaRM if hasattr(self, "sigmaRM") else 0.25
         pmr_distribution = self.pmr_distribution if hasattr(self, "pmr_distribution") else "log-normal"
         if use_redshift == False:
             lambda_true_grid, M_grid = np.meshgrid(lambda_true, M)
+            lambda_true_grid = lambda_true_grid.astype(float_dtype)
+            M_grid = M_grid.astype(float_dtype)
             lambda_model = mass2richness_Norm * (M_grid / mass2richness_Pivot)**mass2richness_Slope 
+            self.D_ang =  ((planck18.angular_diameter_distance(z_grid) * (1 + z_grid)))[None,:,:]
         else:
             lambda_true_grid, M_grid, z_grid = np.meshgrid(lambda_true, M, z_arr, indexing="ij")
             lambda_model = mass2richness_Norm * (M_grid / mass2richness_Pivot)**mass2richness_Slope * \
@@ -2733,6 +2992,7 @@ class grouped_clusters:
             self.M_grid = M_grid
             self.z_grid = z_grid
             self.lambda_model = lambda_model
+            self.D_ang = ((planck18.angular_diameter_distance(z_grid) * (1 + z_grid)))[None,:,:,:]
         if redshift_weight_function == False:
             Wz = lambda x: 1
         else:
@@ -2755,13 +3015,10 @@ class grouped_clusters:
         params = richness_weights_function_kwargs["params"]
 
         dV = Wz(z_arr)*cosmo.differential_comoving_volume(z_arr).to(u.kpc**3 / u.sr)
-
-        norm = trapz(dV * trapz(dndM * P_Mass.T, axis = 1, x = M), x= z_arr,axis = 0)
-
-        self.norm = norm
         if (use_two_halo_term is not None) and type(use_two_halo_term) in (str, bool):
             if use_two_halo_term == True or use_two_halo_term == "only":
-                print("Creating\033[92m 1+2-halo function.\033[0m") if use_two_halo_term == True else print("Creating\033[92m 2-halo function.\033[0m")
+                if verbose:
+                    print("Creating\033[92m 1+2-halo function.\033[0m") if use_two_halo_term == True else print("Creating\033[92m 2-halo function.\033[0m")
                 R2halo = two_halo_kwargs["R"]
                 delta = two_halo_kwargs["delta"]
                 M_arr2halo = two_halo_kwargs["M_arr"]  
@@ -2770,57 +3027,142 @@ class grouped_clusters:
                 mdef = ccl.halos.MassDef(delta, two_halo_kwargs["background"])
                 mfunc = ccl.halos.mass_function_from_name("Tinker10")
                 mfunc = mfunc(cosmo2halo, mdef)
-                dndM2halo = np.array([[mfunc(cosmo2halo, Mi, 1/(zi + 1)) for Mi in M_arr2halo] for zi in z_arr])
-                dndM2halo = dndM2halo * 1/(M_arr2halo * np.log(10))    
+                dndM2halo = np.array([[mfunc(cosmo2halo, Mi, 1/(zi + 1)) for Mi in M_arr2halo] for zi in z_arr]).astype(float_dtype)
+                dndM2halo = np.array(dndM2halo * 1/(M_arr2halo * np.log(10))).astype(float_dtype)
                 bias = ccl.halos.HaloBiasTinker10(cosmo2halo, mass_def=mdef) 
-                bh = np.array([bias.get_halo_bias(cosmo2halo, M, 1/(1 + zi)) for zi in z_arr])
-                bM = np.array([[bias.get_halo_bias(cosmo2halo, Mi, 1/(1 + zi)) for Mi in M_arr2halo] for zi in z_arr])
-                Pk = np.array([ccl.linear_matter_power(cosmo2halo, k2halo, 1/(1+zi)) for zi in z_arr])
+                bh = np.array([bias.get_halo_bias(cosmo2halo, M, 1/(1 + zi)) for zi in z_arr]).astype(float_dtype)
+                bM = np.array([[bias.get_halo_bias(cosmo2halo, Mi, 1/(1 + zi)) for Mi in M_arr2halo] for zi in z_arr]).astype(float_dtype)
+                Pk = np.array([ccl.linear_matter_power(cosmo2halo, k2halo, 1/(1+zi)) for zi in z_arr]).astype(float_dtype)
                 Rgrid, M2halo_grid, z2halo_grid, k2halo_grid = np.meshgrid(R2halo, M_arr2halo, z_arr, k2halo, indexing = "ij")
                 ki_r = Rgrid*k2halo_grid
                 sin_term = np.sin(ki_r) / np.where(ki_r != 0, ki_r, 1)
-
+                self.D_ang2halo = (planck18.angular_diameter_distance(z_arr) * (1 + z_arr))[None,:]
                 lambda2halo_grid = mass2richness_Norm * (M2halo_grid / mass2richness_Pivot)**mass2richness_Slope * \
                                     ((1 + z2halo_grid)/(1 + mass2richness_Pivot_redshift)) **mass2richness_Slope_redshift  
+                two_halo_power_func = two_halo_kwargs["two_halo_power_func"]
+                self.two_halo_func = two_halo_power_func
+                self.two_halo_func_evals = (two_halo_kwargs["eval_only_mass"], two_halo_kwargs["eval_only_richness"], two_halo_kwargs["eval_only_redshift"])
             else:
-                print("Creating\033[92m 1-halo function.\033[0m")
+                if verbose:
+                    print("Creating\033[92m 1-halo function.\033[0m")
 
-        print("Using fixed\033[92m halo model\033[0m") if fixed_RM_relationship == True else print("Ussing free\033[92m halo model\033[0m") 
+        if verbose:
+            print("Using fixed\033[92m halo model\033[0m") if fixed_RM_relationship == True else print("Using free\033[92m halo model\033[0m") 
 
         if mis_centering == True:
             Roff = np.array(mis_centering_kwargs["Roff"])[:, None] #Roff of mis-centering
             rho_Roff = mis_centering_kwargs["distribution"] #p(Roff)
             theta = mis_centering_kwargs["theta"]
-            print("Adding\033[92m mis-centering\033[0m")
+            print("Adding\033[92m mis-centering\033[0m") if verbose else None
 
         if use_filters and filters is not None:
+            print("Adding filters:")
+            [print(f"\033[92m{k}\033[0m: {v}") for k,v in filters.items()]
             func_names = list(filters.keys())
             func_args = list(filters.values())
             self_output_path = self.output_path
             self_output_path = self_output_path + "/" if self_output_path[-1] != "/" else self_output_path
             func_filters = [load_function_from_file(self_output_path + "filters.py", n) for n in func_names]
 
+        if rebinning == True:
+            print(f"Using \033[92mrebinning\033[0m")
+            method_rebinning = rebinning_kwargs["method"]
+            interpolation_kwargs = rebinning_kwargs["interpolation_kwargs"]
+            nbins_rebinning = rebinning_kwargs["nbins"]
+            pixel_size_rebinning = rebinning_kwargs["pixel_size"]
+        if subr_grid == True:
+            rmin, rmax = subr_grid_kwargs["rmin"], subr_grid_kwargs["rmax"]
+            n = subr_grid_kwargs["n"]
+            subR_grid = np.linspace(rmin, rmax, n)
+        if weighted == True:
+            print(f"Using \033[92mweight\033[0m")
+            if hasattr(self, "weights"):
+                W = self.weights
+                redshift = self.z
+                richness = self.richness
+                lambda_obs = self.lambda_obs
+
+                z_edges = (z_arr[:-1] + z_arr[1:]) / 2
+                z_first = z_arr[0] - (z_arr[1] - z_arr[0]) / 2
+                z_last  = z_arr[-1] + (z_arr[-1] - z_arr[-2]) / 2
+                edges = np.concatenate(([z_first], z_edges, [z_last]))
+
+                lambda_edges = (lambda_obs[:-1] + lambda_obs[1:]) / 2
+                lambda_first = lambda_obs[0] - (lambda_obs[1] - lambda_obs[0]) / 2
+                lambda_last  = lambda_obs[-1] + (lambda_obs[-1] - lambda_obs[-2]) / 2
+                lambda_edges = np.concatenate(([lambda_first], lambda_edges, [lambda_last]))
+                
+                weights = np.ones((len(z_arr), len(lambda_obs)))
+                for i in range(len(z_edges)-1):
+                    for j in range(len(lambda_edges)-1):
+                        mask = np.where((redshift > edges[i]) & (redshift < edges[i+1]) & (richness > lambda_edges[j]) & (richness < lambda_edges[j+1]))[0]
+                        if len(mask) > 0:
+                            weights[i][j] = np.sum(W[mask])
+                        else:
+                            continue
+                weights = weights.T
+            else:
+                print("Weights not available!")
+                weights = np.ones((len(z_arr), len(lambda_obs))).T
+        else:
+            weights = np.ones((len(z_arr), len(lambda_obs))).T
+
+        self.W = weights
+
+        norm = np.trapz( 
+                dV * np.trapz( dndM.T * 
+                    np.trapz(
+                        np.trapz(PllM*weights[None,:,None,:], axis = 0, x = lambda_true), axis = 0, x = lambda_obs
+                        ), axis = 0, x = M)
+                    , axis = 0, x = z_arr) 
+
+        self.norm = norm
         global func
-        def func(R, params, RM_params = None, new_PllM = None, new_sigmaRM = None, rbins = 35, new_Plambda_true = None, 
-                smooth = None, eval_lambda = True, mis_centering_params = None, Roff = np.logspace(-1, 1, 10), 
-                theta = np.linspace(0,2*np.pi,60), mass2richness_Pivot = 3e14/0.7, mass2richness_Pivot_redshift = 0.35):
-            M,z_arr= self.M, self.z_arr
+        def func(r, params, RM_params = None, new_PllM = None, new_sigmaRM = None, rbins = 35, new_Plambda_true = None, 
+                smooth = None, eval_lambda = True, mis_centering_params = None, Roff = np.logspace(-1, 1, 10), return_2halo_term = False,
+                theta = np.linspace(0,2*np.pi,60), mass2richness_Pivot = 3e14/0.7, mass2richness_Pivot_redshift = 0.35
+                , sigmaRM = 0.25, two_halo_power = None, return_profile_grid = False, R_intp = None):
+            if subr_grid == True:
+                R = subR_grid
+            else:
+                R = r
+            M,z_arr = self.M, self.z_arr
             lambda_true = self.lambda_true
             lambda_obs = self.lambda_obs
             M_grid = self.M_grid
             z_grid = self.z_grid
             Plambda_true = self.Plambda_true
             lambda_model = self.lambda_model
-            #print("\nparams profile = ", params, "\nrichness-mass params = ", RM_params, "\nmis-centering params = ",mis_centering_params)
             PllM = self.PllM
             Plambda_obs_M = self.Plambda_obs_M
             P_Mass = self.P_Mass
             norm = self.norm
-            lambda_model = self.lambda_model
+            D_ang = self.D_ang
+            weights = self.W
+            Mgrid_mis, zgrid_mis = np.meshgrid(M, z_arr)
+            R_Mpc_mis = ((R * u.arcmin).to(u.rad)[:,None,None] * ((planck18.angular_diameter_distance(zgrid_mis) * (1 + zgrid_mis)))[None,:,:]).value
+            theta = np.array(theta, dtype = float_dtype)
+            Roff = np.array(Roff, dtype = float_dtype)
+            Roff2 = Roff[:, None, None,None]
+
+            f2halo = self.two_halo_func if hasattr(self, "two_halo_func") else None
+
+            xmis = (Roff2**2 + R_Mpc_mis[None, :,:,:]**2 + 2 * (R_Mpc_mis[None,:,:,:] * Roff2)[None,...] * np.cos(theta[:, None, None, None, None])) ** 0.5
+            if new_PllM is not None:
+                PllM = new_PllM
+            if new_Plambda_true is not None:
+                Plambda_true = new_Plambda_true
+            if new_sigmaRM is not None:
+                sigmaRM = new_sigmaRM
+
             if fixed_RM_relationship == False and RM_params is not None:
                 mass2richnes_Norm, mass2richness_Slope, mass2richness_Slope_redshift = RM_params
                 if use_redshift == True:
                     lambda_true_grid, M_grid2, z_grid2 = np.meshgrid(lambda_true, M, z_arr, indexing = "ij")
+                    lambda_true_grid = lambda_true_grid.astype(float_dtype)
+                    M_grid2 = M_grid2.astype(float_dtype)
+                    z_grid2 = z_grid2.astype(float_dtype)
+
                     lambda_model = mass2richness_Norm * (M_grid2 / mass2richness_Pivot)**mass2richness_Slope * \
                                 ((1 + z_grid2)/(1 + mass2richness_Pivot_redshift)) **mass2richness_Slope_redshift     
                 else:
@@ -2837,63 +3179,455 @@ class grouped_clusters:
                         -(np.log(lambda_true_grid) - np.log(lambda_model))**2/ (2*sigmaRM**2))
 
                 PllM = Plambda_true [:,:,None,:]* Plambda_true_Mass[:,None,:,:] # P(lambda_true | lambda_obs) * P(M | lambda_true) ==> P(lambda_obs | lambda_true, M)
-                Plambda_obs_M = trapz(PllM, axis = 0, x = lambda_true) # P(lambda_obs | M)
+                Plambda_obs_M = np.trapz(PllM, axis = 0, x = lambda_true) # P(lambda_obs | M)
                 Plambda_obs_M = gaussian_filter(Plambda_obs_M, smooth) if smooth is not None else Plambda_obs_M
-                P_Mass = trapz(Plambda_obs_M, axis = 0, x = lambda_obs) # P(M)
-                norm = trapz(dV * trapz(dndM * P_Mass.T, axis = 1, x = M), x= z_arr,axis = 0)
-            x_grid = lambda_model if eval_lambda == True else M_grid
-            R_Mpc = ((R * u.arcmin).to(u.rad)[:,None,None,None] * ((planck18.angular_diameter_distance(z_grid) * (1 + z_grid)))[None,:,:,:]).value
-            one_halo_term = one_halo_profile(R_Mpc, x_grid, z_grid, params, rbins) #result is the profile model evaluated at R, M/lambda, z
-            weighted_one_halo_term = one_halo_term[:,:,None,:,:] * PllM[None,...]
+                P_Mass = np.trapz(Plambda_obs_M, axis = 0, x = lambda_obs) # P(M)
+                norm = np.trapz( 
+                        dV * np.trapz( dndM.T * 
+                            np.trapz(
+                                np.trapz(PllM*weights[None,:,None,:], axis = 0, x = lambda_true), axis = 0, x = lambda_obs
+                                ), axis = 0, x = M)
+                            , axis = 0, x = z_arr) 
+
+            if use_two_halo_term != "only" and return_2halo_term == False:
+                x_grid = lambda_model if eval_lambda == True else M_grid
+                R_Mpc = ((R * u.arcmin).to(u.rad)[:,None,None,None] * self.D_ang).value
+                one_halo_term = one_halo_profile(R_Mpc, x_grid, z_grid, params, rbins, richness_pivot = richness_pivot, redshift_pivot = redshift_pivot) if eval_mass == False else one_halo_profile(R_Mpc, x_grid, M_grid, z_grid, params, rbins, richness_pivot = richness_pivot, redshift_pivot = redshift_pivot) #result is the profile model evaluated at R, M/lambda, z
+                weighted_one_halo_term = weights[None,None,:,None,:]*one_halo_term[:,:,None,:,:] * PllM[None,...]
+
             if use_two_halo_term == True or use_two_halo_term == "only":
-                PRMzk = two_halo_profile(Rgrid, lambda2halo_grid, z2halo_grid, params)
-                R_Mpc2halo = ((R * u.arcmin).to(u.rad)[:,None] * (planck18.angular_diameter_distance(z_arr) * (1 + z_arr))[None,:]).value
-                P2halo = compute_two_halo(Rgrid, lambda2halo_grid, z2halo_grid, params, Pk, bh, 
+                PRMzk = two_halo_profile(Rgrid, lambda2halo_grid, z2halo_grid, params, rbins, richness_pivot = richness_pivot, redshift_pivot = redshift_pivot) if eval_mass == False else two_halo_profile(Rgrid, lambda2halo_grid, M2halo_grid, z2halo_grid, params, rbins, richness_pivot = richness_pivot, redshift_pivot = redshift_pivot)
+                R_Mpc2halo = ((R * u.arcmin).to(u.rad)[:,None] * self.D_ang2halo).value       
+                P2halo = compute_two_halo(Rgrid, lambda2halo_grid, z2halo_grid, np.array(params, dtype = np.float64), Pk, bh, 
                     dndM2halo, bM, R2halo, M_arr2halo, k2halo, lambda_true, lambda_obs, PRMzk, 
                     sin_term, R, M, z_arr, R_Mpc2halo, k2halo_grid, PllM)
+                two_halo_term = np.reshape(np.trapz(np.trapz(np.trapz(P2halo, axis = 0, x = R2halo), axis = 0, x = M_arr2halo)
+                                            , axis = -1, x = k2halo), (len(R), len(M), len(z_arr)))
+                if return_2halo_term == True:
+                    return two_halo_term
+                weighted_two_halo_term = PllM[:,None, ...] * two_halo_term[None,:,None,:,:]*weights[None,None,:,None,:]
+                if two_halo_power is not None:
+                    if hasattr(self, "two_halo_func_evals"):
+                        if np.all(self.two_halo_func_evals == True):
+                            weighted_two_halo_term = f2halo(lambda_model, M_grid, z_grid, two_halo_power)[:,None,None,:,:]*weighted_two_halo_term
+                    else:
+                        pass
+                P2halo = np.trapz(np.trapz(weighted_two_halo_term, axis = 0, x = lambda_true), axis = 1, x = lambda_obs)
 
-                I1 = np.trapz(P2halo, axis = 0, x = R2halo)
-                I2 = np.trapz(I1, axis = 0, x = M_arr2halo)
-                two_halo_term = np.reshape(np.trapz(I2, axis = -1, x = k2halo), (len(R), len(M), len(z_arr)))
-                weighted_two_halo_term = PllM[:,:,None, ...] * two_halo_term[None, None, ...]
-                I1 = np.trapz(weighted_two_halo_term, axis = 0, x = lambda_true)
-                P2halo = np.trapz(I1, axis = 0, x = lambda_obs)
-            I1 = trapz(weighted_one_halo_term, axis = 1, x = lambda_true) #integrate over the true richness
-            P1halo = trapz(I1, axis = 1, x = lambda_obs) #integrate over the observed richness
-            PRMz = P1halo if use_two_halo_term == False else P1halo + P2halo #P(R|M,z) = P1halo or P(R|M,z) = P1halo(R|M,z) + P2halo(R|M,z)
-            PRMz = P2halo if use_two_halo_term == "only" else PRMz #P2halo(R|M,z) if use_two_halo_term == 'only'
-            if mis_centering == True and mis_centering_params is not None:
-                Mgrid, zgrid = np.meshgrid(M, z_arr)
-                R_Mpc = ((R * u.arcmin).to(u.rad)[:,None,None] * ((planck18.angular_diameter_distance(zgrid) * (1 + zgrid)))[None,:,:]).value
-                fmis, mis_centering_params = mis_centering_params[0], mis_centering_params[1::] if mis_centering_params is not None else [0.246, 0.385]
-                weights = rho_Roff(Roff, *mis_centering_params)
-                Roff2 = Roff[:, None, None,None]
-                x = (Roff2**2 + R_Mpc[None, :,:,:]**2 + 2 * (R_Mpc[None,:,:,:] * Roff2)[None,...] * np.cos(theta[:, None, None, None, None])) ** 0.5
-                funcs = [
-                [UnivariateSpline(R_Mpc[:,i,j], pj, k=1, s=0) for j,pj in enumerate(pi)] for i,pi in enumerate(PRMz.T)
-                ]
-                off = np.array(
-                    [[trapz(fj(x[:,:,:,i,j]), theta, axis=0) for j,fj in enumerate(fi)] for i,fi in enumerate(funcs)]
-                )
-                woff = np.array(
-                    [[trapz(weights[:,None] * off[i,j,:,:], Roff, axis = 0)/trapz(weights, Roff) for j,pj in enumerate(pi)] 
-                    for i,pi in enumerate(off)]
-                )
-                PRMz = (1 - fmis)*PRMz + fmis*woff.T/(2*np.pi)
+            P1halo = trapz(trapz(weighted_one_halo_term, axis = 1, x = lambda_true), axis = 1, x = lambda_obs) #integrate over the observed richness
+            if hasattr(self, "two_halo_func_evals") and two_halo_power is not None:
+                if self.two_halo_func_evals[0] == False and self.two_halo_func_evals[1] == False and self.two_halo_func_evals[2] == True:
+                    z_grid2, M_grid2 = np.meshgrid(z_arr, M)
+                    z_unique, z_index = np.unique(z_grid2, return_inverse = True)
+                    P2halo = self.two_halo_func(z_unique, two_halo_power)[z_index].reshape(z_grid2.shape)[None,...]*P2halo
+            if use_two_halo_term == False:
+                PRMz = [P1halo]
+            elif use_two_halo_term == True:
+                PRMz = [P1halo, P2halo]
+                if return_1h2h == False:
+                    PRMz = [P1halo + P2halo]
+            elif use_two_halo_term == "only":
+                PRMz = [P2halo]
+            if return_profile_grid == True:
+                return PRMz
 
-            stacked_profile = trapz(dV[None,...] * trapz(dndM.T * PRMz, axis = 1, x = M), x = z_arr, axis = 1)/norm #integrate over the mass and redshift
+            output = np.zeros((len(PRMz), len(r)), dtype = float_dtype)
+            infered_Mass = 0
+            for k, P in enumerate(PRMz):
+                if mis_centering == True and mis_centering_params is not None:
+                    fmis, mis_centering_params_func = mis_centering_params[0], mis_centering_params[1::] if mis_centering_params is not None else [0.246, 0.385]
+                    weights = np.array(rho_Roff(Roff, *mis_centering_params_func), dtype = float_dtype)
 
-            if units == "arcmin":
-                stacked_profile = gaussian_filter1d(stacked_profile, 1.3589) #FWHM = 1.6 ==> 1.3598 pixel scale
-            elif units == "kpc":
-                sigma_profiles = sigma_profiles * cosmo.arcmin_per_proper_kpc(np.mean(self.z))
-                stacked_profile= gaussian_filter1d(stacked_profile, sigma_profiles)
-            if use_filters == True and filters is not None:
-                for i in range(len(func_filters)):
-                    stacked_profile = func_filters[i](R, stacked_profile, **func_args[i])
-            #print("stacked profile = ", stacked_profile)
-            return stacked_profile
+                    funcs = [
+                    [UnivariateSpline(R_Mpc_mis[:,i,j], pj, k=1, s=0) for j,pj in enumerate(pi)] for i,pi in enumerate(P.T)
+                    ]
+                    off = np.array(
+                        [[np.trapz(fj(xmis[:,:,:,i,j]), theta, axis=0) for j,fj in enumerate(fi)] for i,fi in enumerate(funcs)]
+                    )
+                    woff = np.array(
+                        [[np.trapz(weights[:,None] * off[i,j,:,:], Roff, axis = 0)/np.trapz(weights, Roff) for j,pj in enumerate(pi)] 
+                        for i,pi in enumerate(off)]
+                    )
+                    P = (1 - fmis)*P + fmis*woff.T/(2*np.pi)
+
+                if infere_mass == True:
+                    if mass_inf_kwargs["is_kappa"] == True:
+                        sigma_crit = sigma_crit_cmb(z_arr)
+                        rho_RMz = (sigma_crit[None, None, :] * P).value
+                        infered_Masses = np.zeros((len(z_arr), len(M)))
+                        for i in range(len(z_arr)):
+                            rho_i = np.array(rho_RMz[:,:,i], dtype = object)
+                            r_mpc = np.array(R_Mpc[:,0,:,i], dtype = object)
+                            if mass_inf_kwargs["interpolate"] == True:
+                                new_R = np.linspace(r.min(), r.max(), mass_inf_kwargs["Nr"])
+                                new_rho_i = np.zeros((len(new_R), len(M)))
+                                for j in range(len(M)):
+                                    new_rho_i[:,j] = UnivariateSpline(r_mpc[:,j], rho_i[:,j], k=1, s=0)(new_R)
+                                rho_i = new_rho_i
+                                r_mpc = np.repeat(new_R, len(M)).reshape((len(new_R), len(M)))
+                            infered_Masses[i] = trapz(2*np.pi*r_mpc * rho_i, x = r_mpc, axis = 0)
+                        infered_Mass += np.trapz(dV * np.trapz((dndM * infered_Masses).T, axis = 0, x = M), axis = 0, x = z_arr)/norm
+
+                if apply_filter_per_profile == True:
+                    Pz = np.trapz(dndM.T*P, axis = 1, x = M)
+                    new_P = np.zeros_like(Pz)
+                    for zi in range(len(z_arr)):
+                        for i in range(len(func_filters)):
+                            if i == 0:
+                                new_P[:,zi] = func_filters[i](R, Pz[:,zi], **func_args[i])
+                            else:
+                                new_P[:,zi] = func_filters[i](R, new_P[:,zi], **func_args[i])
+                    stacked_P = np.trapz(dV[None,...]*new_P, x = z_arr, axis = 1)/norm
+                else:
+                    stacked_P = np.trapz(dV[None,...] * np.trapz(dndM.T * P, axis = 1, x = M), x = z_arr, axis = 1)/norm #integrate over the mass and redshift 
+                if apply_filter_per_profile == False:
+                    if use_filters == True and filters is not None:
+                        for i in range(len(func_filters)):
+                            stacked_P = func_filters[i](R, stacked_P, **func_args[i])
+                if rebinning == True:
+                    if method_rebinning == 'interp1d':
+                        intp = interp1d(R, stacked_P, **interpolation_kwargs)
+                    elif method_rebinning == 'spline':
+                        intp = UnivariateSpline(R, stacked_P, **interpolation_kwargs)
+                    pix_size = pixel_size_rebinning
+
+                    R_edges = np.zeros(len(r) + 1)
+                    R_edges[1:-1] = 0.5 * (r[1:] + r[:-1])
+                    R_edges[0]  = r[0] - 0.5 * (r[1] - r[0])
+                    R_edges[-1] = r[-1] + 0.5 * (r[-1] - r[-2])
+
+                    x = np.arange(-R_edges.max(), R_edges.max(), pix_size)
+                    y = np.arange(-R_edges.max(), R_edges.max(), pix_size)
+                    x,y = np.meshgrid(x,y)
+                    r_intp = np.sqrt(x**2 + y**2)
+                    P_r = intp(r_intp)
+
+                    stacked_P = np.zeros(len(R_edges)-1, dtype = float_dtype)
+                    for i in range(len(R_edges) - 1):
+                        ri,rf = R_edges[i], R_edges[i+1]
+                        mask = np.where((r_intp >= ri) & (r_intp < rf))
+                        stacked_P[i] = np.nanmean(P_r[mask]) if len(P_r[mask]) > 0 else 0
+                output[k] = stacked_P
+            Ptotal = np.sum(output, axis = 0).astype(float_dtype) if len(output) > 1 else output[0]
+            if return_1h2h == True and use_two_halo_term == True:
+                P1h, P2h = output
+                if infere_mass == True:
+                    return Ptotal, P1h, P2h, infered_Mass
+                return Ptotal, P1h, P2h
+            elif return_1h2h == False and use_two_halo_term == 'only':
+                if infere_mass ==  True:
+                    return P2h, infered_Mass
+                return P2h
+            else:
+                if infere_mass == True:
+                    return Ptotal, infered_Mass
+                return Ptotal
         return func
+
+    def create_beam_filter(self, mode = "a"):
+        output_path = self.output_path
+        content = f"""
+from scipy.ndimage import gaussian_filter1d
+import numpy as np
+def apply_beam(R, data, fwhm = 1.6):
+    fwhm = float(fwhm)
+    sigma = fwhm / (2 * np.sqrt(2 * np.log(2)))
+    dr = (R[-1] - R[0]) / (len(R) - 1)
+    sigma_pix = sigma / dr
+    return gaussian_filter1d(data, sigma=sigma_pix, mode='constant', cval=0.0)
+        """
+        with open(output_path + "/filters.py", mode) as f:
+            f.write(content)
+        
+    def stats(self):
+        print("Number of clusters:", len(self))
+        print("Richness:", self.richness.min(), "-", self.richness.max())
+        print("Redshift:", self.z.min(), "-", self.z.max())
+        print("Mean richness:", np.mean(self.richness))
+        print("Mean redshift:", np.mean(self.z))
+        if hasattr(self, "snr"):
+            print("SNR^2 (stack):", self.snr**2)
+        else:
+            cov = self.cov
+            prof = self.mean_profile
+            snr = np.sqrt(np.dot(prof, np.dot(np.linalg.inv(cov), prof.T)))
+            self.snr = snr
+            print("SNR^2 (stack):", self.snr**2)
+        try:
+            print("SNR^2 (median):", np.mean(np.sum(self.profiles**2/self.errors**2, axis = 1)))
+        except:
+            pass
+    @classmethod
+    def compute_joint_cov(self, paths = None, off_diag = False, groups = None, corr = False):
+        if paths is not None and np.iterable(paths) and groups is None:
+            groups = []
+            covs = []
+            if paths is not None and np.iterable(paths):
+                for i in range(len(paths)):
+                    sub_group = grouped_clusters.load_from_path(paths[i])
+                    covs.append(sub_group.cov)
+                    groups.append(sub_group)
+        else:
+            covs = [g.cov for g in groups]
+
+        full_covariance_matrix = block_diag(*covs)
+
+        if off_diag == True:
+            N = 0
+            off_diag_matrix = np.zeros(np.shape(full_covariance_matrix))
+            for i in range(len(groups)):
+                for j in range(i):
+                    N+=1
+                    if i!=j:
+                        g1, g2 = groups[i], groups[j]
+                        prof1 = g1.random_profiles_cov if hasattr(g1, "random_profiles_cov") else g1.profiles
+                        prof2 = g2.random_profiles_cov if hasattr(g2, "random_profiles_cov") else g2.profiles
+
+                        if np.ndim(prof1) == 3 or np.ndim(prof2) == 3:
+                            if np.ndim(prof1) > np.ndim(prof2):
+                                Nrand = np.shape(prof1)[0]
+                                N2 = len(prof2)
+                                idx = np.random.choice(Nrand, size=(Nrand, N2), replace=True)
+                                prof2 = prof2[idx]
+                            if np.ndim(prof2) > np.ndim(prof1):
+                                Nrand = np.shape(prof2)[0]
+                                N1 = len(prof1)
+                                idx = np.random.choice(Nrand, size=(Nrand, N1), replace=True)
+                                prof1 = prof1[idx]
+                            Nrand1, Nrand2 = len(prof1), len(prof2)
+                            if Nrand1 != Nrand2:
+                                Nnew = min((Nrand1, Nrand2))
+                                prof1 = prof1[:Nnew]
+                                prof2 = prof2[:Nnew]
+                            Nr = np.shape(prof1)[-1]
+                            N1, N2 = np.shape(prof1)[1], np.shape(prof2)[1]
+                            mean1 = np.mean(prof1, axis=0)
+                            mean2 = np.mean(prof2, axis=0)
+                            resid1 = prof1 - mean1 
+                            resid2 = prof2 - mean2  
+                            off = np.zeros((Nr,Nr))
+                            for k in range(Nr):
+                                for l in range(Nr):
+                                    off[k,l] = np.mean(np.sum(resid1[:,None,k] * resid2[:,:,None,l], axis = (1,2)), axis = 0)/(N1*N2)
+                            off_diag_matrix[int(i*Nr):int((i+1)*Nr), int(j*Nr):int((j+1)*Nr)] = off
+                        else:
+                            Nbase = 100
+                            indx1 = np.random.choice(np.arange(len(prof1)), size = (Nbase, len(prof1)), replace = True)
+                            indx2 = np.random.choice(np.arange(len(prof2)), size = (Nbase, len(prof2)), replace = True)
+                            prof1 = prof1[indx1]
+                            prof2 = prof2[indx2]
+                            mean1 = np.mean(prof1, axis=0)
+                            mean2 = np.mean(prof2, axis=0)
+
+                            resid1 = prof1 - mean1 
+                            resid2 = prof2 - mean2  
+                            N1, N2 = np.shape(prof1)[1], np.shape(prof2)[1]
+                            Nr = np.shape(prof1)[-1]
+                            resid1 = prof1 - mean1 
+                            resid2 = prof2 - mean2  
+                            off = np.zeros((Nr,Nr))
+                            for k in range(Nr):
+                                for l in range(Nr):
+                                    off[k,l] = np.mean(np.sum(resid1[:,None,k] * resid2[:,:,None,l], axis = (1,2)), axis = 0)/(N1*N2)
+                            off_diag_matrix[int(i*Nr):int((i+1)*Nr), int(j*Nr):int((j+1)*Nr)] = off
+
+            full_covariance_matrix = full_covariance_matrix + off_diag_matrix + off_diag_matrix.T
+        if corr == False:
+            return groups, full_covariance_matrix
+        else:
+            sigma = np.sqrt(np.diag(full_covariance_matrix))
+            full_correlation_matrix = full_covariance_matrix/np.outer(sigma, sigma)
+            return groups, full_covariance_matrix, full_correlation_matrix
+
+    @classmethod
+    def stacked_halo_model_func_by_paths(self, profile_model, units = "arcmin", 
+                                        full = False, Rbins = 25, Mbins = 10, Zbins = 11,
+                                        paths = None, verbose_pivots = False,
+                                        rotate_cov = False, use_filters = False,
+                                        filters = None, off_diag = False, verbose = False,
+                                        recompute_cov = False, use_two_halo_term = False,
+                                        fixed_RM_relationship = True, use_mis_centering = False,
+                                        delta = 500, background = "critical", eval_mass = False,
+                                        return_cov = False,  apply_filter_per_profile = False,
+                                        rebinning = False, dtype = np.float32, return_1h2h = False,
+                                        infere_mass = False, sort = True, subr_grid = False,
+                                        **kwargs):
+        default_completeness_kwargs = (
+            ("zbins", Zbins),
+            ("Mbins", Mbins),
+            ("interpolate", False),
+            ("use_lambda_obs", True),
+            ("use_redshift", True),
+            ("background", background),
+            ("delta", delta),
+            ("verbose", verbose)
+        )
+
+        default_mass_inf_kwargs = (
+            ("is_kappa", True),
+            ("use_therm_EQ", False),
+            ("use_function", False),
+            ("func", None)
+        )
+        default_rebinning_kwargs = (
+            ("nbins", 50),
+            ("method", 'interp1d'),
+            ("pixel_size", 0.5),
+            ("interpolation_kwargs", dict(kind='cubic', bounds_error=False, fill_value=0))
+        )
+
+        default_subr_grid_kwargs = (
+            ("rmin", 0.1),
+            ("rmax", 15),
+            ("n", 30)
+        )
+        default_two_halo_kwargs = (
+            ("background", background),
+            ("R", np.logspace(-1, 1.7, 20)),
+            ("k", np.logspace(-15,15, 50)),
+            ("M_arr", np.logspace(13,16, 20)),
+            ("z_arr", np.linspace(1e-3,1, 20)),
+            ("cosmo", ccl.CosmologyVanillaLCDM()),
+            ("delta", delta)    
+        )
+
+        default_mis_centering_kwargs = (
+            ("Roff", np.linspace(0, 2, 30)),
+            ("distribution", lambda x,sigma: x/sigma**2*np.exp(-x**2/(2*sigma**2))),
+            ("params", [0.245, 0.354]),
+            ("theta", np.linspace(0, 2*np.pi, 30))
+        )
+        mis_centering_kwargs = set_default(kwargs.pop("mis_centering_kwargs", {}), default_mis_centering_kwargs)
+        rebinning_kwargs = set_default(kwargs.pop("rebinning_kwargs", {}), default_rebinning_kwargs)
+        completeness_kwargs = set_default(kwargs.pop("completeness_kwargs", {}), default_completeness_kwargs)
+        two_halo_kwargs = set_default(kwargs.pop("two_halo_kwargs",{}), default_two_halo_kwargs)
+        mass_inf_kwargs = set_default(kwargs.pop("mass_inf_kwargs",{}), default_mass_inf_kwargs)
+        subr_grid_kwargs = set_default(kwargs.pop("subr_grid_kwargs",{}), default_subr_grid_kwargs)
+        groups = []
+        covs = []
+        profiles = np.array([])
+        about_clusters = []
+        funcs = []
+        bins = []
+        if paths is not None and np.iterable(paths):
+            for i in range(len(paths)):
+                sub_group = grouped_clusters.load_from_path(paths[i])
+                if rotate_cov:
+                    print("rotating covariance matrix")
+                    sub_group.rotate_cov_matrix()
+                profiles = np.concatenate((profiles, sub_group.mean_profile))
+                covs.append(sub_group.cov)
+                groups.append(sub_group)
+                redshift_bin = sub_group.redshift_bin
+                richness_bin = sub_group.richness_bin
+                bins.append([*richness_bin,*redshift_bin])
+                funcs.append(sub_group.stacked_halo_model_func(profile_model, units, rbins = Rbins, zbins = Zbins, Mbins = Mbins,
+                                    use_filters = use_filters, filters = filters, use_two_halo_term = use_two_halo_term, 
+                                    fixed_RM_relationship = fixed_RM_relationship, two_halo_kwargs = two_halo_kwargs,
+                                    mis_centering = use_mis_centering, mis_centering_kwargs = mis_centering_kwargs,
+                                    background = background, delta = delta, eval_mass = eval_mass,
+                                    apply_filter_per_profile = apply_filter_per_profile, rebinning = rebinning,
+                                    rebinning_kwargs = rebinning_kwargs, return_1h2h = return_1h2h, verbose = verbose,
+                                    infere_mass = infere_mass, mass_inf_kwargs = mass_inf_kwargs, subr_grid = subr_grid,
+                                    subr_grid_kwargs = subr_grid_kwargs))
+                about_clusters.append(
+                    dict(
+                        richness = (np.min(sub_group.richness),np.max(sub_group.richness)),
+                        redshift = (np.min(sub_group.z),np.max(sub_group.z)),
+                        N = len(sub_group),
+                        path = paths[i]
+                    )
+                )
+        
+        _,full_covariance_matrix = grouped_clusters.compute_joint_cov(groups = groups, off_diag = off_diag)
+        bins = np.array(bins)
+        if sort == True:
+            sorted_idx = np.lexsort((bins[:,3], bins[:,2], bins[:,1], bins[:,0]))
+            bins = bins[sorted_idx]
+            groups = [groups[i] for i in sorted_idx]
+            covs = [covs[i] for i in sorted_idx]
+            funcs = [funcs[i] for i in sorted_idx]
+            profiles = profiles[sorted_idx]
+            about_clusters = [about_clusters[i] for i in sorted_idx]
+        global func_gen
+        def func_gen(R, params, RM_params = None, new_PllMs = None, smooth = None, eval_lambda = True, 
+                    mis_centering_params = None, theta = np.linspace(0, 2*np.pi, 30), Roff = np.linspace(0, 2, 30),
+                    two_halo_power = 1, cbin = None):
+            if cbin is None:
+                results = np.zeros(len(R) * len(funcs), dtype = dtype)
+                if return_1h2h == True:
+                    p1halo = np.zeros(len(R) * len(funcs), dtype = dtype)
+                    p2halo = np.zeros(len(R) * len(funcs), dtype = dtype)
+                if infere_mass == True:
+                    M = np.zeros(len(funcs), dtype = dtype)
+                for n,f in enumerate(funcs):
+                    new_PllM = new_PllMs[n] if new_PllMs is not None else None
+                    current_results = f(R,params, RM_params = RM_params, new_PllM = new_PllM, smooth = smooth, 
+                                        eval_lambda = eval_lambda, mis_centering_params = mis_centering_params,
+                                        theta = theta, Roff = Roff, two_halo_power = two_halo_power)
+                    if return_1h2h == False:
+                        if infere_mass == True:
+                            M[n] = current_results[-1]
+                            results[n*len(R):(n+1)*len(R)] = current_results[0]
+                        else:
+                            results[n*len(R):(n+1)*len(R)] = current_results
+                    else:
+                        if infere_mass == False:
+                            results[n*len(R):(n+1)*len(R)], p1halo[n*len(R):(n+1)*len(R)], p2halo[n*len(R):(n+1)*len(R)] = current_results
+                        else:
+                            results[n*len(R):(n+1)*len(R)], p1halo[n*len(R):(n+1)*len(R)], p2halo[n*len(R):(n+1)*len(R)], M[n] = current_results
+                if return_1h2h == True:
+                    if infere_mass == True:
+                        return results, p1halo, p2halo, M
+                    return results, p1halo, p2halo
+                else:
+                    if infere_mass == True:
+                        return results, M
+                    else:
+                        return results
+            elif cbin is not None and len(cbin) == 4 and np.ndim(cbin) == 1:
+                idx = np.argmin(np.sum(np.array(cbin) - bins, axis = 0), axis = 0)   
+                return funcs[idx](R, params, RM_params = RM_params, new_PllM = new_PllMs, smooth = smooth, 
+                                    eval_lambda = eval_lambda, mis_centering_params = mis_centering_params,
+                                    theta = theta, Roff = Roff, two_halo_power = two_halo_power)
+            elif cbin is not None and np.ndim(cbin) > 1:
+                results = np.zeros(len(R) * len(cbin), dtype = dtype)
+                if return_1h2h == True:
+                    p1halo = np.zeros(len(R) * len(cbin), dtype = dtype)
+                    p2halo = np.zeros(len(R) * len(cbin), dtype = dtype)
+                if infere_mass == True:
+                    M = np.zeros(len(cbin), dtype = dtype)
+                for n,c in enumerate(cbin):
+                    diff = np.sum(np.array(c) - bins, axis = 1)
+                    idx = np.where(diff == 0)[0][0]
+                    current_results = funcs[idx](R, params, RM_params = RM_params, new_PllM = new_PllMs, smooth = smooth, 
+                                        eval_lambda = eval_lambda, mis_centering_params = mis_centering_params,
+                                        theta = theta, Roff = Roff, two_halo_power = two_halo_power)
+                    if return_1h2h == False:
+                        if infere_mass == True:
+                            M[n] = results[-1]
+                            results[n*len(R):(n+1)*len(R)] = current_results[0]
+                        else:
+                            results[n*len(R):(n+1)*len(R)] = current_results
+                    else:
+                        if infere_mass == False:
+                            results[n*len(R):(n+1)*len(R)], p1halo[n*len(R):(n+1)*len(R)], p2halo[n*len(R):(n+1)*len(R)] = current_results
+                        else:
+                            results[n*len(R):(n+1)*len(R)], p1halo[n*len(R):(n+1)*len(R)], p2halo[n*len(R):(n+1)*len(R)], M[n] = current_results
+                if return_1h2h == True:
+                    if infere_mass == True:
+                        return results, p1halo, p2halo, M
+                    return results, p1halo, p2halo
+                else:
+                    if infere_mass == True:
+                        return results, M
+                    else:
+                        return results
+        if full == True:
+            return func_gen, full_covariance_matrix, about_clusters, groups, profiles, funcs
+        else:
+            return func_gen
+
 
     def stacked_halo_model_func_by_bins(self, profile_model, units = "arcmin", 
                                         full = False, rb = None, zb = None,
@@ -2903,24 +3637,35 @@ class grouped_clusters:
                                         filters = None, off_diag = False,
                                         recompute_cov = False, use_two_halo_term = False,
                                         fixed_RM_relationship = True, use_mis_centering = False,
+                                        delta = 500, background = "critical", eval_mass = False,
+                                        return_cov = False,  apply_filter_per_profile = False,
+                                        rebinnng = False, return_1h2h = False, verbose = False,
                                         **kwargs):
-    
         default_completeness_kwargs = (
             ("zbins", Zbins),
             ("Mbins", Mbins),
             ("interpolate", False),
             ("use_lambda_obs", True),
             ("use_redshift", True),
+            ("background", background),
+            ("delta", delta),
+            ("verbose", verbose)
+        )
+        default_rebinning_kwargs = (
+            ("nbins", 50),
+            ("method", 'interp1d'),
+            ("pixel_size", 0.5),
+            ("interpolation_kwargs", dict(kind='cubic', bounds_error=False, fill_value=0))
         )
 
         default_two_halo_kwargs = (
-            ("background", "critical"),
+            ("background", background),
             ("R", np.logspace(-1, 1.7, 20)),
             ("k", np.logspace(-15,15, 50)),
             ("M_arr", np.logspace(13,16, 20)),
             ("z_arr", np.linspace(1e-3,1, 20)),
             ("cosmo", ccl.CosmologyVanillaLCDM()),
-            ("delta", 500)    
+            ("delta", delta)    
         )
 
         default_mis_centering_kwargs = (
@@ -2931,7 +3676,7 @@ class grouped_clusters:
         )
 
         mis_centering_kwargs = set_default(kwargs.pop("mis_centering_kwargs", {}), default_mis_centering_kwargs)
-
+        rebinning_kwargs = set_default(kwargs.pop("rebinning_kwargs", {}), default_rebinning_kwargs)
         completeness_kwargs = set_default(kwargs.pop("completeness_kwargs", {}), default_completeness_kwargs)
         two_halo_kwargs = set_default(kwargs.pop("two_halo_kwargs",{}), default_two_halo_kwargs)
         self.completeness_and_halo_func(**completeness_kwargs)
@@ -2973,7 +3718,10 @@ class grouped_clusters:
                     funcs.append(s.stacked_halo_model_func(profile_model, units, rbins = Rbins, zbins = Zbins, Mbins = Mbins,
                                  use_filters = use_filters, filters = filters, use_two_halo_term = use_two_halo_term, 
                                  fixed_RM_relationship = fixed_RM_relationship, two_halo_kwargs = two_halo_kwargs,
-                                 mis_centering = use_mis_centering, mis_centering_kwargs = mis_centering_kwargs))
+                                 mis_centering = use_mis_centering, mis_centering_kwargs = mis_centering_kwargs,
+                                 background = background, delta = delta, eval_mass = eval_mass, 
+                                 apply_filter_per_profile = apply_filter_per_profile, rebinning = rebinning,
+                                 rebinning_kwargs = rebinning_kwargs, return_1h2h = return_1h2h, verbose = verbose))
                     groups.append(s)
         elif paths is not None and np.iterable(paths):
             for i in range(len(paths)):
@@ -2987,7 +3735,10 @@ class grouped_clusters:
                 funcs.append(sub_group.stacked_halo_model_func(profile_model, units, rbins = Rbins, zbins = Zbins, Mbins = Mbins,
                                     use_filters = use_filters, filters = filters, use_two_halo_term = use_two_halo_term, 
                                     fixed_RM_relationship = fixed_RM_relationship, two_halo_kwargs = two_halo_kwargs,
-                                    mis_centering = use_mis_centering, mis_centering_kwargs = mis_centering_kwargs))
+                                    mis_centering = use_mis_centering, mis_centering_kwargs = mis_centering_kwargs,
+                                    background = background, delta = delta, eval_mass = eval_mass, verbose = verbose,
+                                    apply_filter_per_profile = apply_filter_per_profile, rebinning = rebinning,
+                                    rebinning_kwargs = rebinning_kwargs, return_1h2h = return_1h2h))
                 about_clusters.append(
                     dict(
                         richness = (np.min(sub_group.richness),np.max(sub_group.richness)),
@@ -3022,22 +3773,34 @@ class grouped_clusters:
                             off = np.zeros((Nr,Nr))
                             for k in range(Nr):
                                 for l in range(Nr):
-                                    off[k,l] = np.mean(np.sum(resid1[:,None,k] * resid2[:,:,None,l], axis = (1,2)), axis = 0)/np.sqrt(N1*N2)
+                                    off[k,l] = np.mean(np.sum(resid1[:,None,k] * resid2[:,:,None,l], axis = (1,2)), axis = 0)/(N1*N2)
                             full_covariance_matrix[int(i*Nr):int((i+1)*Nr), int(j*Nr):int((j+1)*Nr)] = off
                         else:
                             mean1 = np.mean(prof1, axis = 0)
                             mean2 = np.mean(prof2, axis = 0)
-                            
+                            resid1 = prof1 - mean1 
+                            resid2 = prof2 - mean2  
+                            Nr = np.shape(prof1)[-1]
+                            off = np.zeros((Nr,Nr))
+                            N1, N2 = np.shape(prof1)[0], np.shape(prof2)[0]
+                            for k in range(Nr):
+                                for l in range(Nr):
+                                    off[k,l] = np.sum(resid1[:,k] * resid2[:, None,l], axis = (0,1))/(N1*N2)
+                            full_covariance_matrix[int(i*Nr):int((i+1)*Nr), int(j*Nr):int((j+1)*Nr)] = off
+
             full_covariance_matrix = full_covariance_matrix + full_covariance_matrix.T - np.diag(np.diag(full_covariance_matrix))
+        if return_cov == True:
+            return full_covariance_matrix
         global func_gen
         def func_gen(R, params, RM_params = None, new_PllMs = None, smooth = None, eval_lambda = True, 
-                    mis_centering_params = None, theta = np.linspace(0, 2*np.pi, 30), Roff = np.linspace(0, 2, 30)):
-            results = np.zeros(len(R) * len(funcs))
+                    mis_centering_params = None, theta = np.linspace(0, 2*np.pi, 30), Roff = np.linspace(0, 2, 30),
+                    two_halo_power = 1):
+            results = np.zeros(len(R) * len(funcs), dtype = self.dtype)
             for n,f in enumerate(funcs):
                 new_PllM = new_PllMs[n] if new_PllMs is not None else None
                 current_results = f(R,params, RM_params = RM_params, new_PllM = new_PllM, smooth = smooth, 
                                     eval_lambda = eval_lambda, mis_centering_params = mis_centering_params,
-                                    theta = theta, Roff = Roff)
+                                    theta = theta, Roff = Roff, two_halo_power = two_halo_power)
                 results[n*len(R):(n+1)*len(R)] = current_results
             return results
         if full == True:
@@ -3078,6 +3841,13 @@ class grouped_clusters:
                 available_keys = list(f.keys())
                 for k in available_keys:
                     try:
+                        if k == "wcs":
+                            header_str = f[k][()].decode("utf-8")
+                            header = Header.fromstring(header_str, sep = "\n")
+                            wcs = WCS(header)
+                            setattr(self, "wcs", wcs)
+                            continue
+
                         setattr(self, k, f[k][:])
                     except:
                         continue
@@ -3094,15 +3864,15 @@ global random_worker
 def random_worker(ymap = None, mask = None, R_profiles = None, width = None, wcs = None, reproject_maps = None, 
                   N_random = None, Ncl = None, N_clusters = None, rmin = None, rmax = None, dmin = None, dmax = None, 
                   random_coord_size = 500, N_total = None, min_sep = None, worker_id = None, counter = None, 
-                  mask_format = "healpy", compute_individual_matrices = True, dtype = np.float64, save_coords = True,
-                  weights = None, return_patches = False,
+                  mask_format = "healpy", compute_individual_matrices = True, save_coords = True,
+                  weights = None, return_patches = False, dtype = np.float32
                   ):
-    sys.stdout.write(f"\rStarting worker {worker_id} with {N_random} realizations each with {N_clusters} simulated clusters.")
+    sys.stdout.write(f"\rStarting worker {worker_id} with {N_random} realizations each with {N_clusters} simulated clusters.\n")
     sys.stdout.flush()
-    mean_profiles = np.zeros((N_random, len(R_profiles) - 1), dtype = np.float64)
-    random_profiles = np.zeros((N_random, N_clusters, len(R_profiles) - 1), dtype = np.float64)
-    cov_matrices = np.zeros((N_random, len(R_profiles) - 1, len(R_profiles) - 1), dtype = np.float64)
-
+    mean_profiles = np.zeros((N_random, len(R_profiles) - 1), dtype = dtype)
+    random_profiles = np.zeros((N_random, N_clusters, len(R_profiles) - 1), dtype = dtype)
+    cov_matrices = np.zeros((N_random, len(R_profiles) - 1, len(R_profiles) - 1), dtype = dtype)
+    stored_weights = np.zeros((N_random, N_clusters, len(R_profiles) - 1), dtype = dtype)
     if ymap is None and mask is None and "shared_ymap" in globals() and "shared_mask" in globals():
         #print("Loading maps from globals()!")
         ymap = shared_ymap
@@ -3132,7 +3902,7 @@ def random_worker(ymap = None, mask = None, R_profiles = None, width = None, wcs
 
     rng = np.random.default_rng()
 
-    dec2, ra2 = np.zeros((2, N_random, N_clusters))
+    dec2, ra2 = np.zeros((2, N_random, N_clusters)).astype(dtype)
     dec2, ra2 = rng.uniform(dmin, dmax, (N_random, N_clusters)), rng.uniform(rmin, rmax, (N_random, N_clusters))
     for i in range(N_random):
         accepted_coords = 0
@@ -3191,9 +3961,9 @@ def random_worker(ymap = None, mask = None, R_profiles = None, width = None, wcs
             else:
                 continue
     ra2, dec2 = ra2.flatten(), dec2.flatten()
-    coords = np.deg2rad(np.stack((dec2, ra2))).T
+    coords = np.deg2rad(np.stack((dec2, ra2))).T.astype(dtype)
     t1 = time()
-    new_maps = reproject.thumbnails(ymap, coords = coords, r = np.deg2rad(width)/2.) # if isinstance(ymap, np.ndarray) else reproject.thumbnails(enmap.ndmap(ymap, wcs = wcs), coords = np.deg2rad((dec2, ra2)), r = np.deg2rad(width)/2.)
+    new_maps = reproject.thumbnails(ymap, coords = coords, r = np.deg2rad(width)/2., oversample = 2, order = 1) # if isinstance(ymap, np.ndarray) else reproject.thumbnails(enmap.ndmap(ymap, wcs = wcs), coords = np.deg2rad((dec2, ra2)), r = np.deg2rad(width)/2.)
     t2 = time()
     Rbins, new_profiles, sigma, _,  = radial_binning2(new_maps, R_profiles, width = width, full = True)
     random_profiles = np.reshape(new_profiles, (N_random, N_clusters, -1))
@@ -3217,6 +3987,7 @@ def random_worker(ymap = None, mask = None, R_profiles = None, width = None, wcs
                 s = sigma[n]
                 P = random_profiles[n]
                 W = w[:, None] / s
+                stored_weights[n,...] = W
                 Wsum = np.sum(W, axis = 0)
                 mu = np.sum(P*W , axis = 0) / Wsum
                 dev = P - mu[None,:]
@@ -3242,12 +4013,12 @@ def random_worker(ymap = None, mask = None, R_profiles = None, width = None, wcs
     del ra2, dec2, new_maps, new_profiles, random_maps, stacks
     gc.collect()
     if worker_id is not None:
-        sys.stdout.write(f"\rWorker {worker_id} has already finished in {t2 - t1} second!")
+        sys.stdout.write(f"\rWorker {worker_id} has already finished in {t2 - t1} second!\n")
         sys.stdout.flush()
-    if save_coords == True:
-        return cov_matrices, mean_profiles, random_profiles, np.rad2deg(coords)
-    else:
-        return cov_matrices, mean_profiles, random_profiles
+    output = [cov_matrices, mean_profiles, random_profiles]
+    output.append(stored_weights) if weights is not None else None
+    output.append(np.rad2deg(coords)) if save_coords == True else None
+    return output
 
 global bootstrap_worker
 def bootstrap_worker(R_profiles, maps, N_total, counter, width):

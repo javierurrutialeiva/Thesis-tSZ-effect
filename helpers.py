@@ -10,6 +10,7 @@ from scipy.signal import find_peaks
 from sklearn.mixture import GaussianMixture
 from matplotlib import colors as mcolors
 from scipy import stats
+from mpl_toolkits.axes_grid1.axes_divider import make_axes_locatable
 from matplotlib.ticker import MaxNLocator
 import requests
 from scipy.optimize import curve_fit
@@ -21,6 +22,8 @@ import healpy as hp
 from astropy.io import fits
 from scipy.stats.kde import gaussian_kde
 import numpy as np
+from scipy.interpolate import UnivariateSpline as ius
+from scipy import special as spc
 from astropy.coordinates import SkyCoord
 from scipy.stats import norm as norm_scipy
 from tqdm import tqdm
@@ -38,6 +41,8 @@ import shutil
 import sys
 from multiprocessing import Manager, pool
 from astropy.cosmology import Planck18 as planck18
+from numba import njit
+from typing import Optional, Tuple
 
 global check_none
 def check_none(cls):
@@ -63,7 +68,7 @@ def prop2arr(prop,delimiter=',',dtype=np.float64, remove_white_spaces = True):
 	convert a property from a configuration file to a numpy array
 	"""
 	arr = prop.replace(' ','').split(delimiter) if remove_white_spaces else prop.split(delimiter)
-    
+
 	return np.array(arr,dtype=dtype)
 
 
@@ -171,19 +176,25 @@ def list_array_or_tuple_type(arg):
     except:
         raise argparse.ArgumentTypeError("Invalid argument format.")
 
-def random_initial_steps(limits, n):
-    params = np.zeros(n)
-    for i in range(len(params)):
-            if np.all(limits < 0):
-                lower = limits[0]*0.9
-                upper = limits[1]*1.1
-            elif limits[0] < 0 and limits[1] > 0:
-                lower = limits[0]*0.9
-                upper = limits[1]*0.9
-            else:
-                lower = limits[0]*1.1
-                upper = limits[1]*0.9
-            params[i] = np.random.uniform(lower, upper)
+def nsigma_from_posterior(samples, p0=0.3):
+    M = np.median(samples)
+    cdf_value = np.mean(samples < p0) 
+    z_equiv = norm_scipy.ppf(cdf_value)
+    return M, z_equiv
+def random_initial_steps(limits, n, distribution = "uniform", ln_distribution = True,
+                nsamples = 1e4, dist_args = None):
+    if distribution == "uniform":
+        lower, upper = limits
+        params = np.random.uniform(lower, upper, size = n)
+    elif distribution == "fixed":
+        params = np.full(n, limits)
+    else:
+        assert nsamples > n, "nsamples must be greater than n"
+        x = np.linspace(limits[0], limits[1], int(nsamples))
+        weights = np.exp([distribution(xi, *dist_args) for xi in x]) if ln_distribution else [distribution(xi, *dist_args) for xi in x]
+        weights = np.nan_to_num(weights, np.nanmin(weights))
+        weights = weights/np.nansum(weights)
+        params = np.random.choice(x, p = weights, size = n)
     return params
 
 def auto_window(taus, c):
@@ -494,6 +505,39 @@ def compute_radial_covariance(maps, R_profiles_arcmin, width_deg):
 
     return cov, mean_profile, profiles, counts
 
+def auto_broadcast_axes(a, b):
+    """
+    Make `a` broadcastable to `b` by automatically adding np.newaxis in the right positions.
+    Assumes that axes with the same length are meant to be aligned.
+    
+    Parameters
+    ----------
+    a : np.ndarray
+    b : np.ndarray
+    
+    Returns
+    -------
+    a_broadcastable : np.ndarray
+    """
+    a_shape = a.shape
+    b_shape = b.shape
+    
+    matched_a_axes = []
+    
+    new_shape = []
+    a_axes_used = 0
+    
+    for b_len in b_shape:
+        match_found = False
+        for i, a_len in enumerate(a_shape):
+            if i not in matched_a_axes and a_len == b_len:
+                new_shape.append(a_len)
+                matched_a_axes.append(i)
+                match_found = True
+                break
+        if not match_found:
+            new_shape.append(1)  
+    return a.reshape(new_shape)
 
 def radial_binning2(x, R, width=None, r=None, full=False):
     """
@@ -791,7 +835,7 @@ def pte(chi2, cov, cinv=None, n_samples=10000, return_samples=False, return_real
     assert cov.shape[0] == cov.shape[1]
     if cinv is None:
         cinv = np.linalg.pinv(cov)
-    mc = stats.multivariate_normal.rvs(cov=cov, size=n_samples)
+    mc = stats.multivariate_normal(allow_singular = True, cov=cov).rvs(size=n_samples)
     chi2_mc = np.array([np.dot(i, np.dot(cinv, i)) for i in mc])
     pte = (chi2_mc > chi2).sum() / n_samples
     if return_samples == False and return_realizations == False:
@@ -870,10 +914,10 @@ def change_ticks(axes, max_label_size, min_label_size, max_bins):
             ax.tick_params(axis='both', which='major', labelsize=max_label_size)
             ax.tick_params(axis='both', which='minor', labelsize=min_label_size)   
                
-def extract_params(chain, labels = None, best = None, method = "median", percentiles = [16,84], show_results = True, latex_format = False):
+def extract_params(chain, labels = None, best = None, method = "median", percentiles = [16,84], verbose = True, latex_format = False):
     print(f"Computing params using \033[91m{method}\033[0m with \033[35m{percentiles} % uncertainties \033[0m\n")
     if labels is None:
-        show_results = False
+        verbose = False
     if method == "median":
         me = np.median(chain, axis = 0)
         pl, ph = np.abs(np.percentile(chain, percentiles, axis = 0) - me)
@@ -882,7 +926,7 @@ def extract_params(chain, labels = None, best = None, method = "median", percent
         pl, ph = np.abs(np.percentile(chain, percentiles, axis = 0) - me)
 
     for i in range(len(me)):
-        if show_results:
+        if verbose:
             pname = labels[i].replace("$","").replace("\\","")
             if latex_format == False:    
                 print(pname,f": \033[92m{me[i]}\033[0m - \033[92m{pl[i]}\033[0m + \033[92m{ph[i]}\033[0m")
@@ -1378,7 +1422,7 @@ def compute_projected_offset(ra1, dec1, z1, ra2, dec2, z2, cosmo, sep = 1 * u.ar
     return d_proj
 
 
-def sort_paths(list, by_richness = True):
+def sort_paths(paths, by_richness = True):
     pattern = re.compile(r'l(\d+)-(\d+)_') if by_richness == True else re.compile(r'z(\d+)-(\d+)')
     def sort_key(path):
         m = pattern.search(path)
@@ -1388,6 +1432,7 @@ def sort_paths(list, by_richness = True):
         return (low, high)
     sorted_paths = sorted(paths, key=sort_key)
     return sorted_paths
+
 def plot_grouped_clusters(grouped_clusters, labels = None, fig = None, suptitle = "", split_by_richness = True,
          split_by_redshift = False, contours = False, colors = None, sort_colors = False, add_snr = False, 
          labels_coords = (0.5,0.75),**kwargs):
@@ -1479,57 +1524,211 @@ def enmap2binned_cll(path, ell_max = 3000, ell_min = 2, delta_ell = 20, full = F
     else:
         return (bins_centers, binned_cll, errors), (ell, cl)
 
-def load_kappa_data(source_path, folder, output_path, load_filter_only = True):
-    source_path = source_path[:-1] if source_path[-1] == "/" else source_path
-    folder = folder[:-1] if folder[-1] == "/" else folder
-    output_path = output_path[:-1] if output_path[-1] == "/" else output_path
-    from cluster_data import grouped_clusters
-    c = grouped_clusters.empty()
-    c.output_path = output_path + "/" + folder 
-    if os.path.exists(c.output_path) == False:
-        os.mkdir(c.output_path)
+def round_if_ends_in_9(n):
+    if isinstance(n, (int, float)) and abs(int(n)) % 10 == 9:
+        return int(n + 1 )
+    return n
 
-    kfilter = source_path +"/"+ folder + f"/{folder}_kmask.fits"
-    shutil.copy(kfilter, c.output_path)
-    code_content = f"""
+def load_kappa_data(source_path, folders, output_path, load_filter_only = False, load_individual_profiles = False,
+                    profiles_path = "/data2/javierurrutia/szeffect/data/des_run3/", merge = False, 
+                    profiles_subpaths = None, dtype = np.float32, merge_path = None, discard = None
+                    , merge_profiles = False, shift_filter = False):
+    folders = [folders] if type(folders) is str else folders
+    catalogs, cov_matrices, mean_profiles, errors_profiles, R_bin_edges, kfilters, stacked_maps = [], [], [], [], [], [], []
+    profiles_data = []
+    if np.iterable(folders) == True:
+        for i in range(len(folders)):
+            folder = folders[i]
+            print(20*"==")
+            print("Loading kappa data from %s/%s" % (source_path, folder))
+            source_path = source_path[:-1] if source_path[-1] == "/" else source_path
+            folder = folder[:-1] if folder[-1] == "/" else folder
+            output_path = output_path[:-1] if output_path[-1] == "/" else output_path
+            from cluster_data import grouped_clusters
+            c = grouped_clusters.empty()
+            c.output_path = output_path + "/" + folder 
+            if os.path.exists(output_path) == False:
+                os.mkdir(output_path)
+            if os.path.exists(c.output_path) == False:
+                os.mkdir(c.output_path)
+            c.dtype = dtype
+            available_files = [p for p in os.listdir(source_path + "/" + folder) if "._" not in p]
+            catalog_file, cov_matrix_file, mean_profile_file, errors, R_bin_edges_file, kfilter = None, None, None, None, None, None
+            stacked_map_file = None
+            for l in available_files:
+                if catalog_file is None and "catalog_data.txt" in l:
+                    catalog_file = source_path + "/" + folder + f'/{l}'
+                if cov_matrix_file is None and "opt_covm.txt" in l:
+                    cov_matrix_file = source_path + "/" + folder + f'/{l}'
+                if mean_profile_file is None and "opt_profile.txt" in l:
+                    mean_prof_file = source_path + "/" + folder + f'/{l}'
+                if errors is None and "opt_profile_errs.txt" in l:
+                    errors_file = source_path + "/" + folder + f'/{l}'
+                if R_bin_edges_file is None and "bin_edges.txt" in l:
+                    R_bin_edges_file = source_path + "/" + folder + f'/{l}'
+                if kfilter is None and "kmask.fits" in l:
+                    kfilter = source_path + "/" + folder + f'/{l}'
+                if stacked_map_file is None and "sm_opt_weighted_mfsub.fits" in l:
+                    stacked_map_file = source_path + "/" + folder + f'/{l}'
+            print("Loading catalog from %s" % catalog_file)
+            print("Loading covariance matrix from %s" % cov_matrix_file)
+            print("Loading mean profile from %s" % mean_prof_file)
+            print("Loading errors from %s" % errors_file)
+            print("Loading R bin edges from %s" % R_bin_edges_file)
+            print("Loading k-space filter from %s" % kfilter)
+            print("Loading stacked map from %s" % stacked_map_file)
+            filter_file = f"/{folder}_kmask.fits"
+            shutil.copy(kfilter, c.output_path)
+            print("Renaming %s to %s" % (kfilter.split("/")[-1], filter_file.split("/")[-1]))
+            os.rename(c.output_path +"/"+ kfilter.split("/")[-1], c.output_path +"/"+ filter_file.split("/")[-1])
+            if shift_filter == True:
+                print("Shifting filter!")
+                new_filter_name = c.output_path +"/"+ filter_file.split("/")[-1]
+                kf = fits.open(new_filter_name)
+                kf_content = kf[0].data
+                kf[0].data = np.fft.fftshift(kf_content)
+                kf.writeto(new_filter_name, overwrite = True)
+            code_content = f"""
 from profiley.filtering import Filter
 import numpy as np
 import os
 
 current_path = os.path.dirname(os.path.realpath(__file__))
-filt = Filter(current_path + '/des2_l20_z0p1_kmask.fits')
-def apply_k_space_filter(R, data, units = "arcmin"):
-    if hasattr(R,"value"):
-        R = R.value
-    delta_R = (R[1] - R[0])
-    R_edges = np.arange(R[0] - delta_R/2, R[-1] + delta_R, delta_R)
-    theta_filtered, kappa_filtered = filt.filter(R, data, R_edges, units = units)
+filt = Filter(current_path + '{filter_file}')
+def apply_k_space_filter(R_centers, data, units = "arcmin"):
+    if hasattr(R_centers,"value"):
+        R_centers = R_centers.value
+    R_edges = np.zeros(len(R_centers) + 1)
+    R_edges[1:-1] = 0.5 * (R_centers[1:] + R_centers[:-1])
+    R_edges[0]  = R_centers[0] - 0.5 * (R_centers[1] - R_centers[0])
+    R_edges[-1] = R_centers[-1] + 0.5 * (R_centers[-1] - R_centers[-2])
+    theta_filtered, kappa_filtered = filt.filter(R_centers, data, R_edges, units = units)
     return kappa_filtered
+
     """
-    with open(f"{output_path}/{folder}/filters.py", "w") as f:
-        f.write(code_content)
-    
-    if load_filter_only == True:
-        return
-    
-    catalog_data = np.loadtxt(source_path + "/" + folder + f'/{folder}_catalog_data.txt')
-    cov_matrix = np.loadtxt(source_path + "/" + folder + f'/{folder}_opt_covm.txt')
-    mean_prof = np.loadtxt(source_path + "/" + folder + f'/{folder}_opt_profile.txt')
-    errors = np.loadtxt(source_path + "/" + folder + f'/{folder}_opt_profile_errs.txt')
+            with open(f"{output_path}/{folder}/filters.py", "w") as f:
+                f.write(code_content)
+            
+            if load_filter_only == True:
+                c.create_beam_filter()
+                print("The filter were saved!")
+                continue
+            
+            catalog_data = np.loadtxt(catalog_file)
+            cov_matrix = np.loadtxt(cov_matrix_file)
+            mean_prof = np.loadtxt(mean_prof_file)
+            errors = np.loadtxt(errors_file)
+            sm = fits.open(stacked_map_file) if stacked_map_file is not None else None
+            profiles = None
+            if merge_profiles == False:
+                if load_individual_profiles == True:
+                    l = [p for p in os.listdir(profiles_path) if "._" not in p]
+                    for i,li in enumerate(l):
+                        if folder in li:
+                            available_files = [p for p in os.listdir(profiles_path + li) if "._" not in p]
+                            for j, lj in enumerate(available_files):
+                                if "profiles.txt" in lj:
+                                    profiles = np.loadtxt(profiles_path + li + "/" + lj)
+            else:
+                profiles = []
+                for pi in profiles_subpaths:
+                    l = [p for p in os.listdir(profiles_path + pi) if "." not in p]
+                    for i, li in enumerate(l):
+                        if pi in li:
+                            available_files = [p for p in os.listdir(profiles_path + pi + "/" + li) if "." not in p]
+                            if len(available_files) > 0:
+                                sprofiles = np.loadtxt(profiles_path + pi + "/" + li + "/" + available_files[0])
+                                profiles.append(sprofiles)
+                profiles = np.concatenate(profiles)
 
-
-    richness = catalog_data[:,0]
-    redshift = catalog_data[:,2]
-    c.richness = richness
-    c.z = redshift
-    c.cov = cov_matrix
-    c.R = mean_prof[:,0]
-    c.mean_profile = mean_prof[:,1]
-    c.error_in_mean = errors[:,1]
-    c.profiles = np.tile(c.mean_profile, len(richness)).reshape((len(richness),-1))
-    c.errors = np.tile(c.error_in_mean, len(richness)).reshape((len(richness),-1))
-    c.plot()
-    c.save()
+            richness = catalog_data[:,0]
+            weights = catalog_data[:,1]
+            redshift = catalog_data[:,2]
+            print("redshift shape = ", np.shape(redshift))
+            print("richness shape = ", np.shape(richness))
+            if load_individual_profiles == True:
+                print("profiles shape = ", np.shape(profiles))
+            c.stacked_map = sm[0].data if sm is not None else None
+            c.richness = richness
+            c.z = redshift
+            c.cov = cov_matrix
+            c.R = mean_prof[:,0]
+            c.mean_profile = mean_prof[:,1]
+            c.error_in_mean = errors[:,1]
+            c.profiles = np.tile(c.mean_profile, len(richness)).reshape((len(richness),-1)) if load_individual_profiles == False or profiles is None else profiles
+            c.errors = np.tile(c.error_in_mean, len(richness)).reshape((len(richness),-1))
+            c.weights = weights
+            c.redshift_bin = [np.round(np.min(redshift), 1), np.round(np.max(redshift),1)]
+            c.richness_bin = [np.round(np.min(richness)/10)*10, np.round(np.max(richness)/10)*10]
+            print("redshift bin = ", c.redshift_bin)
+            print("richness bin = ", c.richness_bin)
+            print("Saving data to %s" % c.output_path)
+            if discard is not None:
+                R = c.R 
+                profiles = c.profiles[:,np.where((R > discard[0]) & (R < discard[1]))]
+                c.profiles = profiles.reshape((len(profiles), -1))
+                c.discard_by_R(rmin = discard[0], rmax = discard[1], replace = True, plot_comparison = False)
+                
+            c.plot(plot_profiles = load_individual_profiles)
+            if sm is not None:
+                pix_size = np.abs(sm[0].header["CDELT1"]) 
+                xpix, ypix = np.indices(np.shape(sm[0].data))
+                xpix, ypix = (xpix - np.shape(sm[0].data)[0]/2), (ypix - np.shape(sm[0].data)[1]/2)
+                x,y = xpix*pix_size*60, ypix*pix_size*60
+                c.x = x
+                c.y = y
+                c.stacking(only_plot = True, save = True, plot = True)
+            c.save()
+            c.create_beam_filter("a")
+            catalogs.append(catalog_data)
+            cov_matrices.append(cov_matrix)
+            mean_profiles.append(mean_prof)
+            errors_profiles.append(errors)
+            if sm is not None:
+                stacked_maps.append(sm[0].data)
+            if profiles is not None:
+                profiles_data.append(profiles)
+            print(20*"==")
+            if merge == True:
+                kfilter = fits.open(kfilter)[0].data
+                kfilters.append(kfilter)
+    if merge == True:
+        print("Merging data from")
+        [print(f"* {p}") for p in folders]
+        kfilter = np.sum(kfilters, axis = 0)
+        
+        kfilter[kfilter != 0 ] = 1
+        catalog = np.concatenate(catalogs, axis = 0)
+        print(cov_matrices)
+        cov_matrix = np.sqrt(np.sum(np.array(cov_matrices)**2, axis = 0))
+        mean_prof = np.mean(mean_profiles, axis = 0)
+        errors = np.sqrt(np.sum(np.array(errors_profiles)**2, axis = 0))
+        sm = np.mean(stacked_maps, axis = 0)
+        profiles = np.concatenate(profiles_data, axis = 0)
+        redshift = catalog[:,2]
+        richness = catalog[:,0]
+        weights = catalog[:,1]
+        c = grouped_clusters.empty()
+        c.output_path = output_path + "/" + merge_path
+        c.stacked_map = sm if sm is not None else None
+        c.richness = richness
+        c.z = redshift
+        c.cov = cov_matrix
+        c.R = mean_prof[:,0]
+        c.mean_profile = mean_prof[:,1]
+        c.error_in_mean = errors[:,1]
+        c.profiles = np.tile(c.mean_profile, len(richness)).reshape((len(richness),-1))
+        c.errors = np.tile(c.error_in_mean, len(richness)).reshape((len(richness),-1))
+        c.weights = weights
+        c.mean_profile = np.average(c.profiles, axis = 0, weights = c.weights)
+        c.redshift_bin = [np.round(np.min(redshift), 1), np.round(np.max(redshift),1)]
+        c.richness_bin = [np.round(np.min(richness)/10)*10, np.round(np.max(richness)/10)*10]
+        print("redshift bin = ", c.redshift_bin)
+        print("richness bin = ", c.richness_bin)
+        print("Saving data to %s" % c.output_path)
+        c.plot()
+        c.save()
+        c.create_beam_filter("a")
 
 def offset(R, Roff, P, params):
     theta = np.linspace(0, 2*np.pi, 20)
@@ -1768,6 +1967,28 @@ def make_2halo_term_interpolator(P = None, M_arr = None, z_arr = None, R = None,
         return interpolator
     else:
         return M_arr, z_arr, params, R, evals
+
+def M_delta2R_delta(M, z, delta = 500, cosmo = planck18, background = "critical"):
+    """
+    Convert Mdelta to Rdelta assuming spherical symmetry.
+    Parameters:
+        M (float or array-like): Mass in solar masses.
+        delta (float): Overdensity parameter, default is 500.
+        cosmo (astropy.cosmology.Cosmology): Cosmology model, default is Planck18.
+        background (str): Background density type, default is "critical".
+    """
+    if isinstance(M, (int, float)):
+        M = np.array([M])
+    if background == "critical":
+        rho_c = cosmo.critical_density(z).to(u.Msun / u.Mpc**3).value
+    elif background == "matter":
+        rho_c = cosmo.Om0 * cosmo.critical_density(z).to(u.Msun / u.Mpc**3).value
+    else:
+        raise ValueError("Background must be either 'critical' or 'matter'.")
+    
+    R_delta = (3 * M / (4 * np.pi * delta * rho_c))**(1/3)
+    return R_delta
+
 def is_running_via_nohup():
     import sys
     if not sys.stdout.isatty():
@@ -1933,6 +2154,149 @@ def jackknife_covariance(data, width_deg, radii_arcmin, npatches, center=None):
         cov += np.outer(diff, diff)
     cov *= (N - 1) / N
     return cov, m_mean
+
+
+@njit(cache = True, fastmath=True)
+def trapz_flat(y, x = None, axis = -1):
+    """
+    N‑D trapezoidal integrator for use under @njit.
+    Returns (flat_results, shape_except_axis), so you can do:
+        flat, shape = trapz_flat(y, x, axis)
+        result = flat.reshape(shape)
+    """
+    x = np.asarray(x, dtype = y.dtype)
+    ndim = y.ndim
+    if axis < 0:
+        axis += ndim
+    shape = y.shape
+    n = shape[axis]
+    total = y.size
+    strides_el = np.empty(ndim, np.int64)
+    bytesz = y.itemsize
+    for k in range(ndim):
+        strides_el[k] = y.strides[k] // bytesz
+    y_flat = y.reshape((total,))
+    use_unit = (x is None)
+    is_x1d = False
+    x1d = None
+    x_flat = None
+    if not use_unit:
+        is_x1d = (x.ndim == 1)
+        x1d = x
+        x_flat = x.reshape((total,))
+    rem = total // n
+    mult = np.empty(ndim, np.int64)
+    for k in range(ndim):
+        if k == axis:
+            mult[k] = 0
+        else:
+            p = 1
+            for kk in range(k+1, ndim):
+                if kk != axis:
+                    p *= shape[kk]
+            mult[k] = p
+
+    # 8) Allocate outputs
+    out_flat = np.empty(rem, y.dtype)
+    shape_rest = np.empty(ndim-1, np.int64)
+    idx = 0
+    for k in range(ndim):
+        if k != axis:
+            shape_rest[idx] = shape[k]
+            idx += 1
+    for si in range(rem):
+        t = si
+        base = 0
+        for k in range(ndim):
+            if k == axis:
+                continue
+            c = t // mult[k]
+            t -= c * mult[k]
+            base += c * strides_el[k]
+
+        acc = 0.0
+        for j in range(n-1):
+            i0 = base + j * strides_el[axis]
+            i1 = i0 + strides_el[axis]
+            y0 = y_flat[i0]
+            y1 = y_flat[i1]
+
+            if use_unit:
+                dx = 1.0
+            else:
+                if is_x1d:
+                    dx = (x1d[j+1] - x1d[j]) * 1.0
+                else:
+                    dx = (x_flat[i1] - x_flat[i0]) * 1.0
+
+            acc += 0.5 * (y0 + y1) * dx
+
+        out_flat[si] = acc
+
+    return out_flat
+
+def trapz_nd(y, x = None, axis = -1):
+
+    flat = trapz_flat(y, x, axis)
+    shp = list(y.shape)
+    del shp[axis]
+    return flat.reshape(tuple(shp))
+
+
+z_bins = np.linspace(0.10,0.80,15)
+params = np.loadtxt('prj_params_DESY1_lss_lin_dep_v0.txt')
+a_tau_fit, b_tau_fit, a_mu_fit, b_mu_fit, a_sig_fit, b_sig_fit, \
+    a_fprj_fit, b_fprj_fit, a_fmsk_fit, b_fmsk_fit = params[:10]
+atau = ius(z_bins,a_tau_fit,k=1)
+btau = ius(z_bins,b_tau_fit,k=1)
+amu = ius(z_bins,a_mu_fit,k=1)
+bmu = ius(z_bins,b_mu_fit,k=1)
+asig = ius(z_bins,a_sig_fit,k=1)
+bsig = ius(z_bins,b_sig_fit,k=1)
+afprj = ius(z_bins,a_fprj_fit,k=1)
+bfprj = ius(z_bins,b_fprj_fit,k=1)
+afmsk = ius(z_bins,a_fmsk_fit,k=1)
+bfmsk = ius(z_bins,b_fmsk_fit,k=1)
+def mu_model(lin,a,b):
+    return a+b*lin
+
+def sig_model(lin,a,b):
+    return b*lin**a
+
+def tau_model(lin,a,b):
+    return b/lin**a
+
+def fprj_model(lin,a,b):
+    return b*lin**a
+
+def fmask_model(lin,a,b):
+    return b*lin**a
+
+def P_lob_ltr(lob, ltr, z, **kwargs):
+        tau = tau_model(ltr,atau(z),btau(z))
+        mu = mu_model(ltr,amu(z),bmu(z))
+        sig_pure = sig_model(ltr,asig(z),bsig(z))
+        f_mask = fmask_model(ltr,afmsk(z),bfmsk(z))
+        f_prj = fprj_model(ltr,afprj(z),bfprj(z))
+        f_mask[f_mask<0.] = 0.
+        f_mask[f_mask>1.] = 1.
+        f_prj[f_prj<0.] = 0.
+        f_prj[f_prj>1.] = 1.
+        sig2_l = sig_pure**2.
+        erfc_arg1 = (mu+tau*sig2_l-lob)/np.sqrt(2*sig2_l)
+        erfc_arg2 = (lob-mu)/np.sqrt(2*sig2_l)
+        erfc_arg3 = (lob-mu+ltr)/np.sqrt(2*sig2_l)
+        erfc_arg4 = (mu+tau*sig2_l-lob-ltr)/np.sqrt(2*sig2_l)
+        gauss = (1.-f_mask)*(1.-f_prj)*np.exp(-0.5*(lob-mu)**2./sig2_l)/np.sqrt(2.*np.pi*sig2_l)*2. # il 2 si cancella dopo
+        exptau = np.exp(0.5*tau*(2.*mu+tau*sig2_l-2.*lob),dtype = 'float128')
+        pdf = gauss+(exptau*spc.erfc(erfc_arg1)*((1.-f_mask)*f_prj*tau+f_mask*f_prj/ltr)+
+                 f_mask/ltr*(spc.erfc(erfc_arg2)-spc.erfc(erfc_arg3)-f_prj*np.exp(-tau*ltr)*exptau*spc.erfc(erfc_arg4)))
+        pdf = pdf*0.5
+        pdf[np.isinf(exptau)] = 0. 
+        pdf[pdf<0.] = 0.
+        return pdf
+
+
 
 def random_from_histogram(data = None, prob = None, bin_edges = None, counts = None, bins=100, 
                           cut = False, sigma = 1):

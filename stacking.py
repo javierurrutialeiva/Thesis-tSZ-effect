@@ -193,6 +193,7 @@ else:
     mask_path = config_data.get("mask", None) if data_path is None else data_path + config_data.get("mask", None)
     gal_cat_path = config_data.get("gal_cat", None) if data_path is None else data_path + config_data.get("gal_cat", None)
     output_path = config_data.get("output_path", None)
+    dtype = config_data.get("dtype", np.float32)
 
     patch_size = config_data.get("patch_size", 0.8)
     beam_size = config_data.get("beam_size", 1.6)
@@ -206,7 +207,7 @@ else:
     N_cores = int(config_data.get("n_cores", 1))
     coords = config_data.get("coords", "ra,dec,z")
     RA, DEC, Z, ZERR = coords
-    estimate_background = config_data.get("estimate_background", True)
+    estimate_background = config_data.get("estimate_background", False)
     use_cov_matrix = config_data.get("use_cov_matrix", True)
     use_corr_matrix = config_data.get("use_corr_matrix", False)
 
@@ -216,13 +217,14 @@ else:
     ID = config_data.get("ID", "MEM_MATCH_ID")
     delta_richness = config_data.get("delta_richness", 10)
     snr_threshold = config_data.get("snr_threshold", 8)
+
     use_bootstrap = config_data.get("bootstrap", False)
     richness = config_data.get("richness", "LAMBDA_CHISQ, LAMBDA_CHISQ_E")
     use_median_redshift = config_data.get("use_median_redshift", False)
     redshift_bins = config_data.get("redshift_bins", None)
     redshift_bins = np.array(redshift_bins, dtype = float) if redshift_bins is not None else None
     zero_level = config_data.get("zero_level", False)
-    clusters_mask = config_data.get("clusters_mask","clusters_mask.fits")
+    clusters_mask_path = config_data.get("clusters_mask","clusters_mask.fits")
     create_mask = config_data.get("create_clusters_mask", True)
     mask_radius = config_data.get("mask_radius", 10)
     mask_shape = config_data.get("mask_shape", "disk")
@@ -231,9 +233,17 @@ else:
     initial_richness = config_data.get("initial_richness", None)
     max_richness = config_data.get("max_richness", None)
     weighted = config_data.get("weighted", True)
+    richness_bins = config_data.get("richness_bins", None)
     LAMDA, LAMDA_E = richness
 
-
+    cib_deprojection = config_data.get("cib_deprojection", False)
+    if cib_deprojection:
+        cib_dict = {}
+        cib_dict["cib_model"] = config_data.get("cib_model", None)
+        cib_dict["beta"] = config_data.get("beta", None)
+        cib_dict["T_cib"] = config_data.get("T_cib", None)
+        cib_dict["Dbeta"] = config_data.get("Dbeta", False)
+        cib_dict["DT_cib"] = config_data.get("DT_cib", False)
 if os.path.exists(output_path) == False: 
     os.mkdir(output_path)
 
@@ -241,10 +251,10 @@ global ymap, cat, mask
 
 if __name__ == "__main__":
 
-    ymap = enmap.read_map(ymap_path)
+    ymap = enmap.read_map(ymap_path).astype(dtype)
     cat = Table(fits.open(gal_cat_path)[1].data)
-    mask = enmap.read_map(mask_path)
-    clusters_mask = hp.fitsfunc.read_map(clusters_mask)
+    mask = enmap.read_map(mask_path).astype(dtype)
+    clusters_mask = hp.fitsfunc.read_map(clusters_mask_path, dtype = dtype)
     ra, dec, z, zerr = cat[RA], cat[DEC], cat[Z], cat[ZERR]
     lamda, lamda_err = cat[LAMDA], cat[LAMDA_E]
     ra[ra > 180] = ra[ra > 180] - 360
@@ -252,7 +262,7 @@ if __name__ == "__main__":
 
     if create_mask == True and os.path.exists(data_path + "clusters_mask.fits") == False:
         print("Building clusters mask")
-        clusters_mask = hp.fitsfunc.read_map(data_path + clusters_mask)
+        clusters_mask = hp.fitsfunc.read_map(data_path + clusters_mask_path)
         clusters_mask[clusters_mask < 0.5] = 0
         clusters_mask[clusters_mask >= 0.5] = 1
         nside = hp.get_nside(clusters_mask)
@@ -265,72 +275,6 @@ if __name__ == "__main__":
             clusters_mask[mask_pix] = 0 
         hp.write_map(data_path + "clusters_mask.fits", clusters_mask, overwrite=True)
         print("saving cluster mask...")
-
-
-
-    # if compute_corr_matrix == True:
-    #     size_rad = np.deg2rad(10 / 60) #unmask clusters using an square with size of 5 arcmins
-    #     Nmax_samples = n_cov_samples
-    #     ymap2 = ymap.copy()
-    #     print("Computing Correlation matrix using y-map + catalog common area.")
-    #     print("*Patch size (rad):",size_rad)
-    #     print("*N samples:",Nmax_samples)
-
-    #     new_map_output = ymap_path.replace(".fits", "") + "_unmasked_clusters.fits"
-    #     ra, dec = ra[:50], dec[:50]
-
-    #     if os.path.exists(new_map_output) == "OHAA":
-    #         ymap2 = enmap.read_map(new_map_output)
-    #     else:
-    #         if pool is None:
-    #             print("Building new mask!")
-    #             ymap2 = mask_regions_worker(ra, dec, ymap, size_rad, mask_shape = mask_shape)
-    #         elif pool is not None:
-    #             N_cores = int(pool._processes)
-    #             print(f"Building new mask with {pool._processes} cores!")
-    #             manager = Manager()
-    #             counter = manager.Value("i", 0 )
-    #             pars = np.array_split(np.column_stack((ra, dec)), N_cores)
-    #             pars = [(*p.T, np.asarray(ymap), size_rad, mask_shape, ymap.wcs, True, len(ra), counter, i) for i,p in enumerate(pars)]    
-    #             new_maps = pool.starmap(mask_regions_worker, pars)
-    #             ymap2 = new_maps[0]
-    #             for i in range(1,len(new_maps)):
-    #                 ymap2*=new_maps[i]
-    #             ymap2*=ymap
-    #         print(f"saving mask to {new_map_output}")
-    #         enmap.write_map(new_map_output, ymap2, allow_modify = True)
-        
-    #     corr_samples = []
-    #     cbar = tqdm(total = Nmax_samples, desc = "Computing Correlation Matrix")
-    #     while len(corr_samples) < Nmax_samples:
-    #         ra2, dec2 = np.deg2rad(np.random.uniform(ra.min(), ra.max())), np.deg2rad(np.random.uniform(dec.min(), dec.max()))
-    #         box = [
-    #             [np.deg2rad(dec2) - np.deg2rad(patch_size) / 2.0, np.deg2rad(ra2) - patch_size / 2.0],
-    #             [np.deg2rad(dec2) + np.deg2rad(patch_size) / 2.0, np.deg2rad(ra2) + patch_size / 2.0],
-    #         ]
-    #         smap = ymap2.submap(box) if reproject_maps == False else reproject.thumbnails(ymap2, coords = (dec2,ra2), r = np.deg2rad(patch_size)/2.)
-    #         smask = mask.submap(box) if reproject_maps == False else reproject.thumbnails(mask, coords = (np.deg2rad(deci),np.deg2rad(rai)), r = np.deg2rad(patch_size)/2.)
-    #         smask[smask >= 3/4] = 1
-    #         smask[smask <= 3/4] = 0
-    #         fmask = len(smask[smask == 1])/smask.size 
-
-    #         if np.all(smap != 0 ) and fmask >= fmask_ratio:
-    #             corr = np.zeros((len(R_profiles) - 1, len(R_profiles) - 1))
-    #             Rbins, profile, sigma, data = radial_binning(smap, R_profiles, wcs = ymap.wcs)
-    #             num_bins = len(Rbins)
-    #             max_length = max([len(d) for d in data])
-    #             matrix = []
-    #             for d in data:
-    #                 matrix.append(np.array(list(d) + [np.nan for i in range(max_length - len(d))]))
-    #             masked_matrix = np.ma.masked_array(matrix, np.isnan(matrix))
-    #             corr = np.ma.corrcoef(masked_matrix)
-
-    #             corr_samples.append(corr)
-    #             cbar.update(1)
-
-    #     corrm = np.mean(corr_samples, axis = 0)
-    #     np.save(output_path + "correlation_matrix.npy", np.mean(corr_samples, axis = 0))
-
     else:
         if os.path.exists(output_path + "correlation_matrix.npy"):
             corrm = np.load(output_path + "correlation_matrix.npy")
@@ -348,6 +292,7 @@ if __name__ == "__main__":
                 cbar.ax.set_yticklabels(ticklabs, fontsize=12)
                 fig.tight_layout()
                 fig.savefig(output_path + "correlation_matrix.png")
+                
     if extract_data == True:
         print("Extracting data...")
         if N_cores > 1:
@@ -371,6 +316,7 @@ if __name__ == "__main__":
     if stacking == True:
         print("Stacking and spliting data...")
         print(f"Running stacking with {N_cores} cores.") if N_cores > 1 else None
+        print("output path:", output_path)
         if rewrite == True:
             available_clusters = [output_path + "individual_clusters/" + p for p in os.listdir(output_path + "individual_clusters")]
             clusters = []
@@ -378,13 +324,12 @@ if __name__ == "__main__":
                 p = available_clusters[i]
                 clusters.append(sz_cluster.load_from_path(p))
             g = np.sum(clusters)
-            g.output_path = output_path + "/entire_sample"
             if os.path.exists(g.output_path) == False:
                 os.mkdir(g.output_path)
+            g.output_path = output_path + "/entire_sample"
             #g.compute_covariance_matrices(R_profiles, width)
             g.save()
             g.plot()
-            A
             g.stacking(R_profiles, plot = True, background_err = False, bootstrap = False, compute_cov_matrix = False, ymap = ymap,
              estimate_covariance = False, estimate_background = False, verbose = True, n_pool = N_cores, 
             mask = mask)
@@ -392,6 +337,9 @@ if __name__ == "__main__":
             g.save()
         else:
             g = grouped_clusters.load_from_path(output_path + "/entire_sample")
+            if hasattr(g, "szmap"):
+                print("Loading SZ map...")
+                g.imap = g.szmap
             g.output_path = output_path + "/entire_sample"
             # if compute_corr_matrix == True:
             #     print("Computing correlation matrix using entire sample")
@@ -399,11 +347,20 @@ if __name__ == "__main__":
             #         bootstrap = use_bootstrap, N_realizations = 1000, background_err = estimate_background,
             #         compute_zero_level = zero_level, ymap = ymap, mask = mask, clusters_mask = clusters_mask
             #         )
+        g.map_path = ymap_path
+        g.wcs = ymap.wcs
+        g.mask_path = mask_path
+        g.catalog = gal_cat_path
+        g.clusters_mask = clusters_mask
+        g.cib_deprojection = cib_deprojection
+        if cib_deprojection == True:
+            g.cib_dict = cib_dict
+
         subgroups = g.split_optimal_richness(R_profiles = R_profiles, method = "stacking", SNr = snr_threshold, rdistance = delta_richness, 
             width = patch_size, N_realizations = 1000, split_by_median_redshift = use_median_redshift, use_bootstrap = use_bootstrap, n_pool = N_cores,
             redshift_bins = redshift_bins, estimate_background = estimate_background, estimate_covariance = estimate_covariance, compute_zero_level = zero_level, 
             ymap = ymap, mask = mask, clusters_mask = clusters_mask, min_richness = min_richness, initial_richness = initial_richness, weighted = weighted
-            , max_richness = max_richness)
+            , max_richness = max_richness, richness_bins = richness_bins)
         for s in subgroups:
             if os.path.exists(s.output_path) == False:
                 os.mkdir(s.output_path)
