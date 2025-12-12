@@ -19,6 +19,7 @@ from bs4 import BeautifulSoup as bs
 from difflib import SequenceMatcher
 import os
 import healpy as hp
+import matplotlib.gridspec as gridspec
 from astropy.io import fits
 from scipy.stats.kde import gaussian_kde
 import numpy as np
@@ -934,6 +935,45 @@ def extract_params(chain, labels = None, best = None, method = "median", percent
                 print(pname,":\033[92m%.3f\033[0m_{-\033[92m%.3f\033[0m}^{+ \033[92m%.3f\033[0m}" % (me[i], pl[i], ph[i]))
     return me,pl,ph
 
+def scatter_hist_mis_centering(lamda, r, z, richness_bins, fig = None, bins = 20, **kwargs):
+    default_fig_kwargs = (
+        ("figsize",(8,8)),
+    )
+    default_ax_kwargs = (
+        ("xlabel", r"$\lambda$"),
+        ("ylabel","$r$ (Mpc)"),
+        ("xscale", "linear"),
+        ("yscale", "linear"),
+        ("title", None)
+    )
+    default_gs_kwargs = (
+        ("width_ratios",(4,1)),
+        ("height_ratios", (1,4)),
+        ("left", 0.1),
+        ("right", 0.9),
+        ("bottom", 0.1),
+        ("top", 0.9),
+        ("wspace", 0.05),
+        ("hspace", 0.05)
+    )
+    fig_kwargs = set_default(kwargs.pop("fig_kwargs",{}), default_fig_kwargs)
+    gs_kwargs = set_default(kwargs.pop("gs_kwargs",{}), default_gs_kwargs)
+    ax_kwargs = set_default(kwargs.pop("ax_kwargs",{}), default_ax_kwargs)
+
+    fig = plt.figure(**fig_kwargs) if fig is None else fig
+    gs = fig.add_gridspec(2,2,**gs_kwargs)
+    ax = fig.add_subplot(gs[1,0])
+    ax_histy = fig.add_subplot(gs[1,1], sharey = ax)
+    ax_histy.tick_params(axis = "y", labelleft = False, labelright = True)
+    for i in range(len(richness_bins)-1):
+        ri, rf = richness_bins[i], richness_bins[i+1]
+        mask = np.where((lamda > ri) & (lamda <= rf))
+        r_i = r[mask]
+        lamda_i = lamda[mask]
+        sc = ax.scatter(lamda_i, r_i, s = 20, edgecolor = "black", label = "$\lambda \in [%.i, %.i]$" % (ri, rf))
+        ax_histy.hist(r_i, bins = bins, orientation = "horizontal", histtype = "step", alpha = 0.5, lw = 3, density = True, color = sc.get_facecolor()[0])
+    ax.scatter([],[], color = "black", label = "Ding et al 2024")
+    return fig
 def scatter_hist(x,y, fig = None, bins = 25, add_contours = True, **kwargs):
     default_fig_kwargs = (
         ("figsize",(8,8)),
@@ -1261,11 +1301,6 @@ def scatter2imshow(x,y,z, fig = None, num_bins = 50, interpolate = False, smooth
         ax_colorbar = divider.append_axes('left', size='5%', pad=0.05)
         
     cbar = plt.colorbar(im, cax = ax_colorbar) 
-
-    nticks = cbar_ticks_kwargs.pop("N", 4)
-
-    #cbar.ax.yaxis.set_major_locator(ticker.MaxNLocator(nbins=nticks)) 
-    cbar.ax.yaxis.set_major_locator(ticker.LogLocator(base=10, numticks=15, subs = "all"))
     cbar.ax.yaxis.set_ticks_position("left")  
     cbar.ax.tick_params(rotation=90)
 

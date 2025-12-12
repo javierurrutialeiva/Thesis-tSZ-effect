@@ -90,7 +90,7 @@ parser.add_argument("--EMCEE_CONFIG", "-E", type = str, default = "EMCEE CONFIG"
 parser.add_argument("--MODEL_CONFIG", "-MC", type = str, default = "MODEL CONFIG", help = "Which key in the config.ini file have information about the physical profile model.")
 parser.add_argument("--ask_to_add", "-Y", action = "store_false", help = "If passed wont be asked to add new clusters to the group and will be assumed the existence of a ignore.txt file in the path")
 #parser.add_argument("--BLOBS_CONFIG", "-B", type = str, default = "BLOBS", help = "This argument specifies which key in config.ini file correspond to emcee blobs")
-parser.add_argument("--smooth_corner","-O", action = "store_true", help = "If passed the corner plot will be smoothened.")
+parser.add_argument("--smooth_corner","-O", default = None, help = "If passed the corner plot will be smoothened. None as predefined value.")
 parser.add_argument("--CONFIG_FILE", "-CF", default = None, help = "Configuration file to extract the PRIORS, EMCEE, MODEL and BLOBS config.")
 parser.add_argument("--joint", "-j", action = "store_true")
 parser.add_argument("--plot-chi2", "-PC", action = "store_true", help = "Plot min-chi2 vs step")
@@ -99,6 +99,13 @@ parser.add_argument("--plot_mis_centering", "-pmc", action = "store_true", help 
 parser.add_argument("--plot_hm_relationship", "-phmr", action = "store_true", help = "Plot hm relationship")
 parser.add_argument("--infere-mass","-I", action = "store_true")
 parser.add_argument("--show-individuals-chi2", "-SIC", action = "store_false", help = "If passed plot the chi2 of each cluster.")
+parser.add_argument("--plot-degenerancies", "-PD", action = "store_true", help = "Plot degenerancy of profiles given a parameter.")
+parser.add_argument("--plot-2halo", "-P2H", action = "store_true", help = "Plot sepparatedly the 1halo and 2halo terms.")
+parser.add_argument("--remove-stuck", "-RS", action = "store_true", help = "Remove stuck walkers from the chain.")
+parser.add_argument("--drop-parameters", "-DP", default = None, help = "Drop parameters from the fit.")
+parser.add_argument("--plot_1h2h", "-P12", action = "store_true", help = "Plot 1halo and 2halo.")
+parser.add_argument("--plot_median", "-PM", action = "store_true", help = "Plot median of chain.")
+parser.add_argument("--plot_best", "-PB", action = "store_true", help = "Plot best fitting.")
 args = parser.parse_args()
 
 verbose = args.verbose
@@ -216,6 +223,22 @@ elif args.CONFIG_FILE is not None and joint == False:
         n_parameters_mc = len(prior_parameters_mc)
         params_indxs.append([params_indxs[-1][1] + 1, params_indxs[-1][1] + n_parameters_mc])
 
+
+    profile_comparison_kwargs = dict(config["PROFILES_TO_COMPARE"])
+    for k in list(profile_comparison_kwargs.keys()):
+        if k == "profiles" or k == "profiles_name":
+            p = profile_comparison_kwargs[k]
+            if "," not in p:
+                profile_comparison_kwargs[k] = [str(p)]
+            else:
+                profile_comparison_kwargs[k] = prop2arr(p, dtype = str)
+            continue
+        try:
+            profile_comparison_kwargs[k] = eval(profile_comparison_kwargs[k])
+        
+        except NameError:
+            continue
+    plot_comparison = profile_comparison_kwargs["plot_comparison"]
     completeness_config = dict(config["COMPLETENESS"])
     for k in list(completeness_config.keys()):
         if completeness_config[k] in ("True", "False"):
@@ -285,9 +308,17 @@ elif args.CONFIG_FILE is not None and joint == False:
         )
     two_halo_kwargs["cosmo"] = ccl.CosmologyVanillaLCDM()
     profile_stacked_model = model_config["profile"]
-    filters = model_config["filters"].split("|")
+    filters = eval(model_config["filters"])
+    filters_dict = filters
     use_filters = str2bool(model_config["use_filters"])
     fil_name, ext = list(prop2arr(config["EMCEE"]["output_file"], dtype = str))
+    delta = float(model_config["delta"]) if "delta" in list(model_config.keys()) else 500
+    background = model_config["background"] if "background" in list(model_config.keys()) else "critical"
+    eval_mass = str2bool(model_config["eval_mass"]) if "eval_mass" in list(model_config.keys()) else False
+    infere_mass = str2bool(model_config["infere_mass"]) if "infere_mass" in list(model_config.keys()) else False
+
+    subr_grid = str2bool(model_config["subr_grid"]) if "subr_grid" in list(model_config.keys()) else False
+    subr_grid_kwargs = dict(model_config["subr_grid_kwargs"]) if "subr_grid_kwargs" in list(model_config.keys()) else {}
 
     xlabel_config, ylabel_config = config["MODEL"]["x"], config["MODEL"]["y"]
 
@@ -356,6 +387,7 @@ elif args.CONFIG_FILE is not None and joint == False:
         pixel_size = pixel_size_rebinning,
     )
 
+    legend_pos = model_config["legend_pos"]
 elif args.CONFIG_FILE is not None and joint == True:
     paths = args.path.split(",")
     config_files = args.CONFIG_FILE.split(",")
@@ -569,6 +601,8 @@ elif args.CONFIG_FILE is not None and joint == True:
     output_path = "/".join(paths[-1].split("/")[:-2])
 
     samples_file = output_path + "/" + fil_name + "_joint_fit.h5" 
+
+
 def main():
     if all_data == False and general == False and joint == False:
         model = getattr(profiles_module, profile_stacked_model)
@@ -739,6 +773,7 @@ def main():
         rbins = int(rbins)
         zbins = int(zbins)
         Mbins = int(Mbins)
+        drop_parameters = np.array(args.drop_parameters.split(","), dtype = int) if args.drop_parameters is not None else None
         plot_general_mcmc(main_path, source_file, profile_stacked_model, labels, plot = args.plot, steps = args.steps, 
                     corner_ = args.corner, make_copy = args.make_copy, discard = args.discard, thin = args.thin,
                     tau = args.tau, use_signal = args.signal, method = args.extract_method, share_plot = args.share_plot,
@@ -746,7 +781,10 @@ def main():
                     xlabel = xlabel, ylabel = ylabel, plot_cov = args.cov_matrix, plot_corr = args.corr_matrix,
                     priors = priors_funcs, priors_args = priors_args, chi2_ = args.plot_chi2, params_indxs = params_indxs,
                     plot_mis_centering = args.plot_mis_centering, plot_hm_relationship = args.plot_hm_relationship,
-                    off_diag = off_diag, ymin = ymin, ymax = ymax
+                    off_diag = off_diag, ymin = ymin, ymax = ymax, plot_degenerancies = args.plot_degenerancies,
+                    plot_comparison = plot_comparison, profile_comparison_kwargs = profile_comparison_kwargs,
+                    legend_pos = legend_pos, remove_stuck = args.remove_stuck, drop_parameters = drop_parameters,
+                    plot_1h2h = args.plot_1h2h, plot_median = args.plot_median, plot_best = args.plot_best
                     )
     elif joint == True:
         plot_joint_mcmc(paths, samples_file, labels, params_indx, profile_models, 
@@ -1100,8 +1138,12 @@ def plot_general_mcmc(main_path, source_file, model, labels, ndims = None, nwalk
                        priors = None, priors_args = None, params_indxs = None, 
                        plot_mis_centering = False, plot_hm_relationship = False, 
                        compute_mass = False, off_diag = False, ymin = None, ymax = None,
+                       plot_degenerancies = False, plot_comparison = False, profile_comparison_kwargs = {},
+                       legend_pos = "best", remove_stuck = False, drop_parameters = None,
+                       plot_1h2h = False, plot_median = True, plot_best = False,
                        **kwargs):
-
+    if drop_parameters is not None:
+        labels = np.array([labels[i] for i in range(len(labels)) if i not in drop_parameters])
 
     ndims = len(labels) if ndims is None else ndims
     labels_latex = [text2latex(l) for l in labels]
@@ -1115,7 +1157,7 @@ def plot_general_mcmc(main_path, source_file, model, labels, ndims = None, nwalk
     paths = []
     
     apply_filter_per_profile = str2bool(model_config["apply_filter_per_profile"])
-
+    
     for path in available_paths:
         if path in ignore:
             continue
@@ -1137,21 +1179,33 @@ def plot_general_mcmc(main_path, source_file, model, labels, ndims = None, nwalk
     rbins = int(rbins)
     zbins = int(zbins)
     Mbins = int(Mbins)
-    sort_by_redshift = False
-    func,cov, about_clusters, clusters, _, funcs = grouped_clusters.stacked_halo_model_func_by_paths(getattr(profiles_module, profile_stacked_model),
+    sort_by_redshift = True
+    if use_signal == True:
+        clusters, cov = grouped_clusters.compute_joint_cov(paths = paths, off_diag = off_diag)
+        func = None
+    else:
+
+        func,cov, about_clusters, clusters, _, funcs = grouped_clusters.stacked_halo_model_func_by_paths(getattr(profiles_module, profile_stacked_model),
                                         full = True, Mbins = Mbins, Rbins = rbins, Zbins = zbins, paths = paths, verbose = True)
                                         # #use_filters = use_filters, filters = filters_dict,
                                         # completeness_kwargs = dict(completeness_config), use_two_halo_term = use_two_halo_term, off_diag = off_diag,
                                         # two_halo_kwargs = two_halo_kwargs, use_mis_centering = use_mis_centering, fixed_RM_relationship = fixed_halo_model
                                         # , background = background, delta = delta, eval_mass = eval_mass, apply_filter_per_profile = apply_filter_per_profile
                                         # ,rebinning = use_rebinning, rebinning_kwargs = rebinning_kwargs)
+    
+
     bins = np.array([[*c.richness_bin, *c.redshift_bin] for c in clusters])
     sorted_idx = np.lexsort((bins[:,3], bins[:,2], bins[:,1], bins[:,0]))
     bins = bins[sorted_idx]
     clusters = [clusters[i] for i in sorted_idx]
-
     cluster, cov = grouped_clusters.compute_joint_cov(off_diag = off_diag, groups = clusters, corr = False)
-
+    masses = []
+    for c in clusters:
+        richness = c.richness
+        redshift = c.z
+        mass = 10**(14.489)*(richness/40)**(1.356)*(redshift/(1+0.35))**(-0.3)
+        masses.append(np.mean(mass))
+        c.mean_M = np.mean(mass)
     profiles = np.array([c.mean_profile for c in clusters])
     R = np.loadtxt(f"{main_path}/xobs.txt")
     sigma = np.loadtxt(f"{main_path}/sigma.txt")
@@ -1194,14 +1248,43 @@ def plot_general_mcmc(main_path, source_file, model, labels, ndims = None, nwalk
         ln_prior = blobs['LN_PRIOR'].flatten()
         ln_likelihood = blobs['LN_LIKELIHOOD'].flatten()
         max_ln_likelihood = np.max(ln_likelihood)
-        chain = backend.get_chain(discard = discard, thin = thin, flat = True)
+        
+        if not remove_stuck:
+            chain = backend.get_chain(discard=discard, thin=thin, flat=True)
+            unflatten_chain = backend.get_chain(discard=discard, thin=thin, flat=False)
+
+        else:
+            unflatten_chain = backend.get_chain(discard=discard, thin=thin, flat=False)
+            nsteps, nwalkers, ndim = unflatten_chain.shape
+            
+            stuck_walkers = []
+
+            for i in range(ndim):
+                schain = unflatten_chain[:, :, i] 
+
+                for j in range(nwalkers):
+                    if np.allclose(schain[-100:, j], schain[-1, j]):
+                        print(f"\033[91mThe chain is stuck at parameter {i}, walker {j}!\033[0m")
+                        stuck_walkers.append(j)
+            stuck_walkers = sorted(set(stuck_walkers))
+
+            if len(stuck_walkers) > 0:
+                unflatten_chain = np.delete(unflatten_chain, stuck_walkers, axis=1)
+            nsteps, nwalkers, ndim = unflatten_chain.shape
+            chain = unflatten_chain.reshape((nsteps * nwalkers, ndim))
+        if drop_parameters is not None:
+            chain = np.delete(chain, drop_parameters, axis = 1)
+            unflatten_chain = np.delete(unflatten_chain, drop_parameters, axis = 2)
         params, lower, upper = extract_params(chain, labels, method = method)
+
+
         for i in range(len(chain.T)):
             c = chain[:,i]
-            _, nsigma = nsigma_from_posterior(c, 0)
-            print(f"{labels[i]} is {nsigma} aways from 0.")
+            val = 0
+            _, nsigma = nsigma_from_posterior(c, val)
+            print(f"{labels[i]} is {nsigma} aways from {val}.")
         if np.all(np.isnan(Masses)) == False and args.infere_mass == True:
-            profiles_per_row = 4
+            profiles_per_row = 3
             num_profiles = len(clusters)
             num_rows = (num_profiles + profiles_per_row - 1) // profiles_per_row
             fig = plt.figure(figsize=(18 + num_rows, 6 * num_rows))
@@ -1407,7 +1490,6 @@ def plot_general_mcmc(main_path, source_file, model, labels, ndims = None, nwalk
                 print(labels_latex[j] + r"& $%.2f_{%.2f}^{%.2f}$ \\" % (params[j],lower[j],upper[j]))
         if chi2_ == True:
             chi2_values2 = blobs["CHI2"]
-            chain2 = backend.get_chain()
             default_chi2_kwargs = (
                 ("zoom_in", False),
                 ("path", f"{output_path}/chi2"),
@@ -1415,7 +1497,7 @@ def plot_general_mcmc(main_path, source_file, model, labels, ndims = None, nwalk
                 ("output_file", "chi2.png"),
                 ("labels", labels)
             )
-            plot_chi2(chi2_values2, chain = chain2, **set_default(kwargs.pop("chi2_kwargs",{}), default_chi2_kwargs)
+            plot_chi2(chi2_values2, chain = unflatten_chain, **set_default(kwargs.pop("chi2_kwargs",{}), default_chi2_kwargs)
             )
         if steps:     
             default_steps_kwargs = (
@@ -1448,7 +1530,7 @@ def plot_general_mcmc(main_path, source_file, model, labels, ndims = None, nwalk
                 ("output_file", f"{output_path}/tau.png")
             )
             tau_kwargs = set_default(kwargs.pop("tau_kwargs", {}), default_tau_kwargs)
-            plot_tau(backend, labels_latex, **tau_kwargs)
+            plot_tau(unflatten_chain, labels_latex, **tau_kwargs)
         if plot_cov == True or plot_corr == True:
             default_cov_kwargs = (
                 ("output_file", f"{output_path}/cov_params.png"),
@@ -1456,196 +1538,344 @@ def plot_general_mcmc(main_path, source_file, model, labels, ndims = None, nwalk
             cov_kwargs = set_default(kwargs.pop("cov_kwargs", {}), default_cov_kwargs)   
             plot_cov_matrix(chain, labels_latex, corr = plot_corr, **cov_kwargs)       
         if plot == True:
-            chi2_values2 = blobs["CHI2"]
-            signal = blobs["SIGNAL"]
-            flat_idx = np.nanargmin(chi2_values)
-            step_idx, walker_idx = np.unravel_index(flat_idx, chi2_values2.shape)
-            best_signal = signal[step_idx, walker_idx,:]
-            best_signal = np.reshape(best_signal, (len(clusters), len(R)))
-            np.savetxt(f"{output_path}/best_signal.txt", best_signal)
-            num_profiles = len(clusters)
-            if share_plot == False:
-                profiles_per_row = 4
-                num_rows = (num_profiles + profiles_per_row - 1) // profiles_per_row
-                fig = plt.figure(figsize=(10 + 5*num_rows, 5 * num_rows))
-                if args.dont_show_results == True:
-                    gs = fig.add_gridspec(num_rows, profiles_per_row , wspace=0, hspace=0)
-                else:
-                    gs = fig.add_gridspec(num_rows, profiles_per_row + 1, wspace=0, hspace=0)
-                #fig.subplots_adjust(left=0.25)  # space for text box
-                axs = []
-                nrows = num_rows
-                ncols = profiles_per_row
-                sorted_idx_redshift = np.lexsort((bins[:,1], bins[:,2]))
-                for i in range(nrows):
-                    row = []
-                    for j in range(ncols):
-                        sharex = axs[0][j] if i > 0 else None  
-                        sharey = row[0] if j > 0 else None  
-                        if args.dont_show_results == True:
-                            ax = fig.add_subplot(gs[i, j], sharex=sharex, sharey=sharey)
+            if plot_degenerancies == False:
+                chi2_values2 = blobs["CHI2"]
+                signal = blobs["SIGNAL"]
+                chain2 = backend.get_chain()
+                P1 = blobs["ONE_HALO"] 
+                P2 = blobs["TWO_HALO"]
+                flat_idx = np.nanargmin(chi2_values)
+                step_idx, walker_idx = np.unravel_index(flat_idx, chi2_values2.shape)
+                best_params = chain2[step_idx, walker_idx,:]
+                best_signal = signal[step_idx, walker_idx,:]
+                best_signal = np.reshape(best_signal, (len(clusters), len(R)))
+                best_signal1halo = P1[step_idx, walker_idx,:]
+                best_signal2halo = P2[step_idx, walker_idx,:]
+                best_signal1halo = np.reshape(best_signal1halo, (len(clusters), len(R)))
+                best_signal2halo = np.reshape(best_signal2halo, (len(clusters), len(R)))
+                np.savetxt(f"{output_path}/best_signal.txt", best_signal)
+                num_profiles = len(clusters)
+                if share_plot == False:
+                    profiles_per_row = 3
+                    num_rows = (num_profiles + profiles_per_row - 1) // profiles_per_row
+                    fig = plt.figure(figsize=(10 + 5*num_rows, 5 * num_rows))
+                    if args.dont_show_results == True:
+                        gs = fig.add_gridspec(num_rows, profiles_per_row , wspace=0, hspace=0)
+                    else:
+                        gs = fig.add_gridspec(num_rows, profiles_per_row + 1, wspace=0, hspace=0)
+                    #fig.subplots_adjust(left=0.25)  # space for text box
+                    axs = []
+                    nrows = num_rows
+                    ncols = profiles_per_row
+                    sorted_idx_redshift = np.lexsort((bins[:,1], bins[:,2]))
+                    for i in range(nrows):
+                        row = []
+                        for j in range(ncols):
+                            sharex = axs[0][j] if i > 0 else None  
+                            sharey = row[0] if j > 0 else None  
+                            if args.dont_show_results == True:
+                                ax = fig.add_subplot(gs[i, j], sharex=sharex, sharey=sharey)
+                            else:
+                                ax = fig.add_subplot(gs[i, j+1], sharex=sharex, sharey=sharey)
+                            row.append(ax)
+                        axs.append(row)
+                    axs = np.reshape(axs, (nrows, ncols))     
+                    axes = axs.flatten()
+                    counter = 0
+                    for i in range(len(clusters)):
+                        counter+=1
+                        if counter <= num_profiles:
+                            if sort_by_redshift == True:
+                                idx = sorted_idx_redshift[i]
+                            else:
+                                idx = i
+                            ax = axes[i]
+                            c = clusters[idx]
+                            zmin, zmax = redshift_bins[idx]
+                            rmin, rmax = richness_bins[idx]
+
+                            default_profiles_kwargs = (
+                                    ("output_file", None),
+                                    ("ax_kwargs", dict(xlabel = xlabel, ylabel = xlabel, xscale = xscale, yscale = yscale, ylim = (ymin, ymax),
+                                                        title = r"$\lambda \in [%.i,%.i]\;,\;z \in [%.2f, %.2f]$" % (rmin, rmax, zmin, zmax))),
+                                    ("show_legend", False),
+                                    ("show_results", False)
+                                    )  
+                            fit = np.nanmedian(signal2bound[:,idx,:], axis = 0)
+                            lower_bound, upper_bound = np.nanpercentile(signal2bound[:,idx,:], [16, 84], axis = 0)
+                            lower_bound = fit - lower_bound
+                            upper_bound = upper_bound - fit 
+                            best_fit = best_signal[idx]
+
+                            profiles_kwargs = set_default(kwargs.pop("profiles_kwargs",{}), default_profiles_kwargs)                
+                            plot_profiles(R, c.mean_profile, func, params, c.cov, labels_latex, lower, upper,
+                                        np.max(ln_likelihood), np.mean(clusters[0].z), ax = ax, fit = fit, lower_bound = lower_bound, show_invidual_chi2 = True,
+                                        upper_bound = upper_bound, signal = signal2bound[:,idx,:], P1halo = P1halo[:,idx,:], P2halo = P2halo[:,idx,:],
+                                        best_fit = best_fit, best_fit1halo = best_signal1halo[idx], best_fit2halo = best_signal2halo[idx],
+                                        plot_1h2h = plot_1h2h, plot_best = plot_best, plot_median = plot_median, **profiles_kwargs)
+                            ax.set_title("")
+                            ax.set_ylabel("")
+                            ax.set_xlabel("")
+                            label = r"$\lambda \in [%.i,%.i]\;,\;z \in [%.2f, %.2f]$" % (rmin, rmax, zmin, zmax)
+                            ax.text(0.95, 0.95, label, transform=ax.transAxes, fontsize=12, ha='right', va='top')
+                            if args.show_individuals_chi2:
+                                current_cov = c.cov
+                                diag = np.sqrt(np.diag(current_cov))
+                                residual = c.mean_profile - best_fit
+                                current_chi2 = np.dot(residual, np.dot(np.linalg.inv(current_cov), residual.T))
+                                current_chi2_no_corr = np.sum(residual**2 / diag**2)
+                                current_pte = pte(current_chi2, current_cov)
+                                ax.text(0.95, 0.88, "$\chi^2 = %.2f\;(%.2f)$ \n $PTE = %.4f$" % (current_chi2, current_chi2_no_corr, current_pte), 
+                                    transform=ax.transAxes, 
+                                    fontsize=12, ha='right', va='top')
+                                ax.text(0.95, 0.75, "$\log_{10}{M} = %.2f [M_{\odot}]$" % (np.log10(c.mean_M)), transform=ax.transAxes, fontsize=12, ha='right', va='top')
                         else:
-                            ax = fig.add_subplot(gs[i, j+1], sharex=sharex, sharey=sharey)
-                        row.append(ax)
-                    axs.append(row)
-                axs = np.reshape(axs, (nrows, ncols))     
-                axes = axs.flatten()
-                counter = 0
-                for i in range(len(clusters)):
-                    counter+=1
-                    if counter <= num_profiles:
-                        if sort_by_redshift == True:
-                            idx = sorted_idx_redshift[i]
-                        else:
-                            idx = i
-                        ax = axes[i]
+                            ax.axis('off')
+                    if plot_comparison == True:
+                        profiles = profile_comparison_kwargs["profiles"]
+                        profile_params = profile_comparison_kwargs["params"]
+                        profiles_name = profile_comparison_kwargs["profiles_name"]
+                        method = profile_comparison_kwargs["method"]
+                        eval_mass = profile_comparison_kwargs["eval_mass"]
+                        for i in range(len(profiles)):
+                            pi = profiles[i]
+                            name = profiles_name[i]
+                            pars = profile_params[i]
+                            eval_m = eval_mass[i]
+                            if method == "stacked":
+                                func,cov, about_clusters, clusters, _, funcs = grouped_clusters.stacked_halo_model_func_by_paths(getattr(profiles_module, pi),
+                                                    full = True, Mbins = Mbins, Rbins = rbins, Zbins = zbins, paths = paths,
+                                                    verbose_pivots = True, use_filters = use_filters, filters = filters_dict, completeness_kwargs = dict(completeness_config), 
+                                                    use_two_halo_term = use_two_halo_term, two_halo_kwargs = two_halo_kwargs, use_mis_centering = use_mis_centering, 
+                                                    fixed_RM_relationship = fixed_halo_model
+                                                    ,background = background, delta = delta, eval_mass = eval_mass, 
+                                                    apply_filter_per_profile = apply_filter_per_profile
+                                                    ,rebinning = use_rebinning, rebinning_kwargs = rebinning_kwargs
+                                                    ,subr_grid = subr_grid, 
+                                                    subr_grid_kwargs = subr_grid_kwargs,)
+                                R = clusters[-1].R
+                                P = func(R, pars)
+                                P = P.reshape((len(clusters), len(R)))
+                            elif method == "average":
+                                P = []
+                                for c in clusters:
+                                    richness = c.richness
+                                    z = c.z
+                                    M200 = 10**(14.489)*((richness/40)**(1.356))*((1 + z)/(1 + 0.35))**(-0.3)
+                                    P.append(getattr(profiles_module, pi)(R, richness, M200, z, pars))
+                            counter = 0
+                            for i in range(len(clusters)):
+                                counter+=1
+                                if counter <= num_profiles:
+                                    if sort_by_redshift == True:
+                                        idx = sorted_idx_redshift[i]
+                                    else:
+                                        idx = i
+                                    ax = axes[i]
+                                    c = clusters[idx]
+                                    ax.plot(R, P[i], label = name)
+                    nrows = len(axs)
+                    ncols = len(axs[0])
+
+                    for i in range(nrows):
+                        for j in range(ncols):
+                            ax = axs[i][j]
+                            if j == 0:
+                                ax.set_ylabel(ylabel)
+                            else:
+                                ax.tick_params(labelleft=False)
+                            if i == nrows - 1:
+                                ax.set_xlabel(xlabel)
+                            else:
+                                ax.tick_params(labelbottom=False)
+                    axs = axes.flatten()
+                    fig.suptitle(model_name, fontsize = 18, fontweight = "bold")
+                    axs[0].legend(loc = legend_pos, fontsize = 10, frameon=False)
+                elif share_plot == True:
+                    fig, ax = plt.subplots(figsize = (14,8))
+                    colors = np.random.choice(list(mcolors.CSS4_COLORS.keys()), size  = num_profiles)
+                    colors = ["darkgreen", "purple","darkblue","darkseagreen","darkred","coral","brown","orange","cyan"]
+                    profile_labels = []
+                    show_redshift = True
+                    val = [np.nanmedian(c.richness) + np.nanmedian(c.z) for c in clusters]
+                    sorted_idx = np.argsort(val)
+                    for i, idx in enumerate(sorted_idx):
+                        color = colors[i]
                         c = clusters[idx]
-                        zmin, zmax = redshift_bins[idx]
-                        rmin, rmax = richness_bins[idx]
+                        zmin, zmax = np.nanmin(c.z), np.max(c.z)
+                        rmin, rmax = int(np.nanmin(c.richness)), int(np.max(c.richness))
+                        rmin = rmin + 1 if abs(int(rmin)) % 10 == 9 else rmin
+                        rmax = rmax + 1 if abs(int(rmax)) % 10 == 9 else rmax
+                        
+                        label = r"$\lambda = [%.i , %.i] \;,\; z = [%.2f, %.2f]$" % (rmin, rmax, zmin, zmax) if show_redshift==True \
+                                else r"$\lambda = [%.i$ , %.i]$" % (rmin, rmax) 
 
                         default_profiles_kwargs = (
                                 ("output_file", None),
-                                ("ax_kwargs", dict(xlabel = xlabel, ylabel = xlabel, xscale = xscale, yscale = yscale, ylim = (ymin, ymax),
-                                                    title = r"$\lambda \in [%.i,%.i]\;,\;z \in [%.2f, %.2f]$" % (rmin, rmax, zmin, zmax))),
                                 ("show_legend", False),
-                                ("show_results", False)
-                                )  
-                        fit = np.nanmedian(signal2bound[:,idx,:], axis = 0)
-                        lower_bound, upper_bound = np.nanpercentile(signal2bound[:,idx,:], [16, 84], axis = 0)
+                                ("fit_plot_kwargs", {"color": color, "label" : None}),
+                                ("bounds_plot_kwargs", {"color": color, "alpha": 0.2, "label" : None}),
+                                ("data_plot_kwargs", {"color": color,"label": label}),
+                                ("show_results", False),
+                                ("ax_kwargs", dict(xlabel = xlabel, ylabel = ylabel, yscale = yscale, xscale = xscale))
+                            ) 
+                        profiles_kwargs = set_default(kwargs.pop("profiles_kwargs",{}), default_profiles_kwargs)    
+                        signal2bound_i = signal2bound[:,i,:] if signal2bound is not None else None
+                        fit = np.median(signal2bound[:,i,:], axis = 0)
+                        lower_bound, upper_bound = np.percentile(signal2bound[:,i,:], [16, 84], axis = 0)
                         lower_bound = fit - lower_bound
                         upper_bound = upper_bound - fit 
-                        best_fit = best_signal[idx]
-
-                        profiles_kwargs = set_default(kwargs.pop("profiles_kwargs",{}), default_profiles_kwargs)                
-                        plot_profiles(R, c.mean_profile, func, params, c.cov, labels_latex, lower, upper,
-                                    np.max(ln_likelihood), np.mean(clusters[0].z), ax = ax, fit = fit, lower_bound = lower_bound, show_invidual_chi2 = True,
-                                    upper_bound = upper_bound, signal = signal2bound[:,idx,:], P1halo = P1halo[:,idx,:], P2halo = P2halo[:,idx,:],
-                                    best_fit = best_fit, **profiles_kwargs)
-                        ax.set_title("")
-                        ax.set_ylabel("")
-                        ax.set_xlabel("")
-                        label = r"$\lambda \in [%.i,%.i]\;,\;z \in [%.2f, %.2f]$" % (rmin, rmax, zmin, zmax)
-                        ax.text(0.95, 0.95, label, transform=ax.transAxes, fontsize=12, ha='right', va='top')
-                        if args.show_individuals_chi2:
-                            current_cov = c.cov
-                            diag = np.sqrt(np.diag(current_cov))
-                            residual = c.mean_profile - best_fit
-                            current_chi2 = np.dot(residual, np.dot(np.linalg.inv(current_cov), residual.T))
-                            current_chi2_no_corr = np.sum(residual**2 / diag**2)
-                            current_pte = pte(current_chi2, current_cov)
-                            ax.text(0.95, 0.88, "$\chi^2 = %.2f\;(%.2f)$ \n $PTE = %.4f$" % (current_chi2, current_chi2_no_corr, current_pte), 
-                                transform=ax.transAxes, 
-                                fontsize=12, ha='right', va='top')
-                    else:
-                        ax.axis('off')
-
-                nrows = len(axs)
-                ncols = len(axs[0])
-
-                for i in range(nrows):
-                    for j in range(ncols):
-                        ax = axs[i][j]
-                        if j == 0:
-                            ax.set_ylabel(ylabel)
-                        else:
-                            ax.tick_params(labelleft=False)
-                        if i == nrows - 1:
-                            ax.set_xlabel(xlabel)
-                        else:
-                            ax.tick_params(labelbottom=False)
-                axs = axes.flatten()
-                fig.suptitle(model_name, fontsize = 18, fontweight = "bold")
-                axs[0].legend(loc = "center right", fontsize = 10)
-            elif share_plot == True:
-                fig, ax = plt.subplots(figsize = (14,8))
-                colors = np.random.choice(list(mcolors.CSS4_COLORS.keys()), size  = num_profiles)
-                colors = ["darkgreen", "purple","darkblue","darkseagreen","darkred","coral","brown","orange","cyan"]
-                profile_labels = []
-                show_redshift = True
-                val = [np.nanmedian(c.richness) + np.nanmedian(c.z) for c in clusters]
-                sorted_idx = np.argsort(val)
-                for i, idx in enumerate(sorted_idx):
-                    color = colors[i]
-                    c = clusters[idx]
-                    zmin, zmax = np.nanmin(c.z), np.max(c.z)
-                    rmin, rmax = int(np.nanmin(c.richness)), int(np.max(c.richness))
-                    rmin = rmin + 1 if abs(int(rmin)) % 10 == 9 else rmin
-                    rmax = rmax + 1 if abs(int(rmax)) % 10 == 9 else rmax
+                        plot_profiles(R + i*0.1, profiles[i], func, params, c.cov, labels_latex, lower, upper,
+                                    np.max(ln_likelihood), np.mean(c.z), ax = ax, fit = fit, lower_bound = lower_bound,
+                                    upper_bound = upper_bound, signal = signal2bound_i, show_labels = False, show_error_bars = True, **profiles_kwargs)
+                    ax.legend(loc = legend_pos, fontsize = 10)
+                    ax.set_title("Best Fitting " + model_name)
+                    #ax.set_ylim((np.nanmin(np.array(profiles)[np.array(profiles) > 0])*0.1, np.max(profiles)*1.5))
+                    ax.grid(True)
                     
-                    label = r"$\lambda = [%.i , %.i] \;,\; z = [%.2f, %.2f]$" % (rmin, rmax, zmin, zmax) if show_redshift==True \
-                            else r"$\lambda = [%.i$ , %.i]$" % (rmin, rmax) 
-
-                    default_profiles_kwargs = (
-                            ("output_file", None),
-                            ("show_legend", False),
-                            ("fit_plot_kwargs", {"color": color, "label" : None}),
-                            ("bounds_plot_kwargs", {"color": color, "alpha": 0.2, "label" : None}),
-                            ("data_plot_kwargs", {"color": color,"label": label}),
-                            ("show_results", False),
-                            ("ax_kwargs", dict(xlabel = xlabel, ylabel = ylabel, yscale = yscale, xscale = xscale))
-                        ) 
-                    profiles_kwargs = set_default(kwargs.pop("profiles_kwargs",{}), default_profiles_kwargs)    
-                    signal2bound_i = signal2bound[:,i,:] if signal2bound is not None else None
-                    fit = np.median(signal2bound[:,i,:], axis = 0)
-                    lower_bound, upper_bound = np.percentile(signal2bound[:,i,:], [16, 84], axis = 0)
-                    lower_bound = fit - lower_bound
-                    upper_bound = upper_bound - fit 
-                    plot_profiles(R + i*0.1, profiles[i], func, params, c.cov, labels_latex, lower, upper,
-                                np.max(ln_likelihood), np.mean(c.z), ax = ax, fit = fit, lower_bound = lower_bound,
-                                upper_bound = upper_bound, signal = signal2bound_i, show_labels = False, show_error_bars = True, **profiles_kwargs)
-                ax.legend(loc = "upper right", fontsize = 10)
-                ax.set_title("Best Fitting " + model_name)
-                #ax.set_ylim((np.nanmin(np.array(profiles)[np.array(profiles) > 0])*0.1, np.max(profiles)*1.5))
-                ax.grid(True)
-                
-            if args.dont_show_results == False:
-                chi2 = np.nanmin(chi2_values)#calculate_chi2(raw_profiles, func(R.value,params), np.linalg.inv(cov_matrix))
-                if args.use_obs_chi2 == True:
-                    observed_profiles = np.nanmedian(signal, axis = 0)
-                    res = raw_profiles - observed_profiles
-                    chi2_obs = np.dot(np.dot(res, np.linalg.inv(cov)), res.T)
-                    p_value = pte(chi2_obs, cov)
-                else:
-                    p_value, chi2_mc = pte(chi2, cov, return_samples= True, n_samples=10000)
-                    chi2_mc = chi2_mc.flatten()
-                    # mu, sigma = np.median(chi2_mc), np.std(chi2_mc)
-                    # fig2, ax2 = plt.subplots(figsize = (12,6))
-                    # ax2.hist(chi2_mc, bins = 100, histtype = "step", color = "black", density = True, alpha = 0.5, label = r"$\chi^2$ realizations")
-                    # chi2_obs = chi2_values[chi2_values < 2000]
-                    # mu_obs, sigma_obs = np.median(chi2_obs), np.std(chi2_obs)
-                    # ax2.hist(chi2_obs, bins = 100, histtype = "step", color = "darkgreen", density = True, alpha = 0.5, label = r"$\chi^2$ observed")
-                    # ax2.plot(np.arange(0, 1.5*np.max(chi2_mc), 0.1), np.exp(-0.5*(np.arange(0, 1.5*np.max(chi2_mc), 0.1) - mu)**2/sigma**2)/np.sqrt(2*np.pi*sigma**2), color = "black", ls = "--")
-                    # ax2.plot(np.arange(0, 1.5*np.max(chi2_obs), 0.1), np.exp(-0.5*(np.arange(0, 1.5*np.max(chi2_obs), 0.1) - mu_obs)**2/sigma_obs**2)/np.sqrt(2*np.pi*sigma_obs**2), color = "darkgreen", ls = "--")
-                    # ax2.set_xlabel(r"$\chi^2$")
-                    # ax2.set_ylabel("Density")
-                    # ax2.set(yscale = "linear", xscale = "linear")
-                    # ax2.set_xlim((np.clip(mu - 4*sigma, 0, np.inf), 1.5*np.max(chi2_obs)))
-                    # _,ylim = ax2.get_ylim()
-                    # ax2.fill_between(np.arange(mu - 3*sigma, mu + 3*sigma, 0.1), 0, ylim, color = "grey", alpha = 0.5)
-                    # ax2.axvline(chi2, color = "red", label = r"$\chi^2$ best fit")
-                    # ax2.legend()
-                    # fig2.tight_layout()
-                    # fig2.savefig(output_path + f"chi2_realizations.png")
-                bic = BIC(np.size(profiles), len(params), max_ln_likelihood)
-                text  = [
-                        r'$\chi^{2} = %.4f$' % chi2,
-                        r'$PTE = %.6f$' % p_value,
-                ]
-                for i in range(len(labels)):
-                    if labels[i].split('_')[0] == r'$\log':
-                        text.append(f'{labels_latex[i]} : {np.round(np.log10(params[i]),2)} $\pm$ {np.round(err[i]/(np.log(10) * paramss[i]),2)}')
+                if args.dont_show_results == False:
+                    chi2 = np.nanmin(chi2_values)#calculate_chi2(raw_profiles, func(R.value,params), np.linalg.inv(cov_matrix))
+                    if args.use_obs_chi2 == True:
+                        observed_profiles = np.nanmedian(signal, axis = 0)
+                        res = raw_profiles - observed_profiles
+                        chi2_obs = np.dot(np.dot(res, np.linalg.inv(cov)), res.T)
+                        p_value = pte(chi2_obs, cov)
                     else:
-                        text.append('%s' % labels_latex[i] + ': $%.2f' % params[i] + '^{+%.2f}_{-%.2f}$' % (np.abs(upper[i]),np.abs(lower[i])))   
-                s = '\n'.join(text)
-                if share_plot:
-                    props = dict(boxstyle = 'round', facecolor = 'white', edgecolor = 'black', alpha = 0.8)
-                    #0.15, 0.6
-                    ax.text(0.8, 0.8, s, fontsize=13, verticalalignment='top', ha = "left", transform=ax.transAxes, bbox=props, color = 'black')
-                else:
-                    props = dict(boxstyle = 'round', facecolor = 'white', edgecolor = 'black', alpha = 0.8)
-                    fig.text(0.12, 0.9, s, fontsize=16, va='top', ha='right', family='monospace', bbox=props, color = 'black',)     
-            fig.tight_layout()           
-            fig.savefig(f"{output_path}/best_fitting.png", dpi = args.dpi, transparent = False)   
+                        p_value, chi2_mc = pte(chi2, cov, return_samples= True, n_samples=10000)
+                        chi2_mc = chi2_mc.flatten()
+                        mu, sigma = np.median(chi2_mc), np.std(chi2_mc)
+                        fig2, ax2 = plt.subplots(figsize = (12,6))
+                        ax2.hist(chi2_mc, bins = 100, histtype = "step", color = "black", density = True, alpha = 0.5, label = r"$\chi^2$ realizations")
+                        chi2_obs = chi2_values[chi2_values < 2000]
+                        mu_obs, sigma_obs = np.median(chi2_obs), np.std(chi2_obs)
+                        ax2.hist(chi2_obs, bins = 100, histtype = "step", color = "darkgreen", density = True, alpha = 0.5, label = r"$\chi^2$ observed")
+                        ax2.plot(np.arange(0, 1.5*np.max(chi2_mc), 0.1), np.exp(-0.5*(np.arange(0, 1.5*np.max(chi2_mc), 0.1) - mu)**2/sigma**2)/np.sqrt(2*np.pi*sigma**2), color = "black", ls = "--")
+                        ax2.plot(np.arange(0, 1.5*np.max(chi2_obs), 0.1), np.exp(-0.5*(np.arange(0, 1.5*np.max(chi2_obs), 0.1) - mu_obs)**2/sigma_obs**2)/np.sqrt(2*np.pi*sigma_obs**2), color = "darkgreen", ls = "--")
+                        ax2.set_xlabel(r"$\chi^2$")
+                        ax2.set_ylabel("Density")
+                        ax2.set(yscale = "linear", xscale = "linear")
+                        ax2.set_xlim((np.clip(mu - 4*sigma, 0, np.inf), 1.5*np.max(chi2_obs)))
+                        _,ylim = ax2.get_ylim()
+                        ax2.fill_between(np.arange(mu - 3*sigma, mu + 3*sigma, 0.1), 0, ylim, color = "grey", alpha = 0.5)
+                        ax2.axvline(chi2, color = "red", label = r"$\chi^2$ best fit")
+                        ax2.legend()
+                        fig2.tight_layout()
+                        fig2.savefig(output_path + f"chi2_realizations.png")
+                    bic = BIC(np.size(profiles), len(params), max_ln_likelihood)
+                    text  = [
+                            r'$\chi^{2} = %.4f$' % chi2,
+                            r'$PTE = %.6f$' % p_value,
+                    ]
+                    for i in range(len(labels)):
+                        if labels[i].split('_')[0] == r'$\log':
+                            text.append(f'{labels_latex[i]} : {np.round(np.log10(params[i]),2)} $\pm$ {np.round(err[i]/(np.log(10) * paramss[i]),2)}')
+                        else:
+                            text.append('%s' % labels_latex[i] + ': $%.2f' % params[i] + '^{+%.2f}_{-%.2f}$' % (np.abs(upper[i]),np.abs(lower[i])))   
+                    s = '\n'.join(text)
+                    if share_plot:
+                        props = dict(boxstyle = 'round', facecolor = 'white', edgecolor = 'black', alpha = 0.8)
+                        #0.15, 0.6
+                        ax.text(0.8, 0.8, s, fontsize=13, verticalalignment='top', ha = "left", transform=ax.transAxes, bbox=props, color = 'black')
+                    else:
+                        props = dict(boxstyle = 'round', facecolor = 'white', edgecolor = 'black', alpha = 0.8)
+                        fig.text(0.12, 0.9, s, fontsize=16, va='top', ha='right', family='monospace', bbox=props, color = 'black',)     
+                fig.tight_layout()           
+                fig.savefig(f"{output_path}/best_fitting.png", dpi = args.dpi, transparent = False)   
+            elif plot_degenerancies == True:
+                arg = int(input("Enter argument index:"))
+                intervals = input("Enter intervals edges separated by comma: ").split(",")
+                intervals = [float(i) for i in intervals]
+                param_label = labels_latex[int(arg)]
+                num_profiles = len(clusters)
+
+                if share_plot == False:
+                    profiles_per_row = 4
+                    num_rows = (num_profiles + profiles_per_row - 1) // profiles_per_row
+                    fig = plt.figure(figsize=(10 + 5*num_rows, 5 * num_rows))
+                    if args.dont_show_results == True:
+                        gs = fig.add_gridspec(num_rows, profiles_per_row , wspace=0, hspace=0)
+                    else:
+                        gs = fig.add_gridspec(num_rows, profiles_per_row + 1, wspace=0, hspace=0)
+                    #fig.subplots_adjust(left=0.25)  # space for text box
+                    axs = []
+                    nrows = num_rows
+                    ncols = profiles_per_row
+                    sorted_idx_redshift = np.lexsort((bins[:,1], bins[:,2]))
+                    for i in range(nrows):
+                        row = []
+                        for j in range(ncols):
+                            sharex = axs[0][j] if i > 0 else None  
+                            sharey = row[0] if j > 0 else None  
+                            if args.dont_show_results == True:
+                                ax = fig.add_subplot(gs[i, j], sharex=sharex, sharey=sharey)
+                            else:
+                                ax = fig.add_subplot(gs[i, j+1], sharex=sharex, sharey=sharey)
+                            row.append(ax)
+                        axs.append(row)
+                    axs = np.reshape(axs, (nrows, ncols))     
+                    axes = axs.flatten()
+                    for i in range(len(axes)):
+                        axi = axes[i]
+                        c = clusters[i]
+                        profile = c.mean_profile
+                        errs = c.error_in_mean
+                        R = c.R
+                        axi.errorbar(R, profile, yerr = errs, fmt = 'o', label = "data", color = "black")
+                        fit = np.median(signal2bound[:,i,:], axis = 0)
+                        lower_bound, upper_bound = np.percentile(signal2bound[:,i,:], [16, 84], axis = 0)
+                        axi.plot(R, fit, label = "median", color = "darkgreen", ls = "solid", lw = 5)
+                        axi.fill_between(R, lower_bound, upper_bound, color = "green", alpha = 0.3, label = r"$1 \sigma$")
+
+                    counter = 0
+                    nrows = len(axs)
+                    ncols = len(axs[0])
+
+                    for i in range(nrows):
+                        for j in range(ncols):
+                            ax = axs[i][j]
+                            if j == 0:
+                                ax.set_ylabel(ylabel)
+                                ax.set_yscale(yscale)
+                            else:
+                                ax.tick_params(labelleft=False)
+                            if i == nrows - 1:
+                                ax.set_xlabel(xlabel)
+                                ax.set_xscale(xscale)
+                            else:
+                                ax.tick_params(labelbottom=False)
+
+                for i in range(len(intervals) - 1):
+                    pmin, pmax = intervals[i], intervals[i + 1]
+                    idxs = np.where((chain[:,arg] > pmin) & (chain[:,arg] < pmax))[0]
+                    if len(idxs) > 0:
+                        p = signal2bound[idxs]
+                        counter = 0
+                        if share_plot == False:
+                            for i in range(len(clusters)):
+                                counter+=1
+                                if counter <= num_profiles:
+                                    if sort_by_redshift == True:
+                                        idx = sorted_idx_redshift[i]
+                                    else:
+                                        idx = i
+                                    ax = axes[i]
+                                    c = clusters[idx]
+                                    zmin, zmax = redshift_bins[idx]
+                                    rmin, rmax = richness_bins[idx]
+                                    fit = np.nanmedian(p[:,idx,:], axis = 0)
+                                    lower_bound, upper_bound = np.nanpercentile(p[:,idx,:], [16, 84], axis = 0)
+                                    if i == 0:
+                                        line, = ax.plot(c.R, fit, lw = 3, label = f"{param_label} = {pmin:.2f} - {pmax:.2f}")
+                                    else:
+                                        line, = ax.plot(c.R, fit, lw = 3)
+                                    color = line.get_color()
+                                    ax.fill_between(c.R, lower_bound, upper_bound, color = color, alpha = 0.2)
+                                else:
+                                    ax.axis('off')
+                axs = axes.flatten()
+                axs[0].legend(fontsize = 10)
+                fig.savefig(f"{output_path}/degeneracies.png", dpi = args.dpi, transparent = False)
+
     elif np.iterable(discard) == True:
         blobs = backend.get_blobs()
         chain = backend.get_chain()
@@ -1873,7 +2103,7 @@ def plot_corner(chain, fig = None, truths = None, truths_color = "black", truths
     plt.rcParams['axes.labelpad'] = 20
     if fig is None:
         fig = plt.figure(**fig_kwargs)
-    smooth = 1 if args.smooth_corner == True else None
+    smooth = float(args.smooth_corner) if args.smooth_corner is not None else None
     fill_contour_kwargs = {'colors': [f'dark{corner_color}', f'light{corner_color}'], 'alpha': 0.1}
     corner_plot = corner.corner(
         chain,
@@ -2182,7 +2412,8 @@ def plot_steps(chain, backend, chi2_values, labels, plot_tracers = False, tracer
 def plot_profiles(R, data, model, params, cov, labels, lower, upper, max_ln_likelihood = 0 , z = 0, fig = None, ax = None,
                   output_file = None, fit = None, best_fit = None, lower_bound = None, upper_bound = None, show_legend = False,
                   show_results = False, signal = None, plot_bounds = True, min_chi2 = None, show_error_bars = True, 
-                  specific_pte = None, specific_chi2 = None, P1halo = None, P2halo = None, **kwargs):
+                  specific_pte = None, specific_chi2 = None, P1halo = None, P2halo = None, plot_median = True, 
+                  plot_best = False,  best_fit1halo = None, best_fit2halo = None, plot_1h2h = False,**kwargs):
     default_fig_kwargs = (
         ("figsize",(8,8)),    
     )
@@ -2249,39 +2480,55 @@ def plot_profiles(R, data, model, params, cov, labels, lower, upper, max_ln_like
         fig = ax.get_figure()
     elif fig is not None and ax is None:
         ax = plt.axes()
-    if best_fit is not None:
-        ax.plot(R, best_fit, **best_fit_plot_kwargs)
-    if plot_bounds == True:
+    if plot_best == True:
+        if best_fit is not None:
+            ax.plot(R, best_fit, **best_fit_plot_kwargs)
+        if plot_1h2h == True:
+            if best_fit1halo is not None:
+                best_fit_plot_kwargs["ls"] = "--"
+                best_fit_plot_kwargs["lw"] = 3
+                best_fit_plot_kwargs.pop("label", None)
+                best_fit_plot_kwargs["alpha"] = 0.5
+                ax.plot(R, best_fit1halo, **best_fit_plot_kwargs)
+            if best_fit2halo is not None:
+                best_fit_plot_kwargs["ls"] = "dotted"   
+                best_fit_plot_kwargs["lw"] = 3
+                best_fit_plot_kwargs["alpha"] = 0.5
+                best_fit_plot_kwargs.pop("label", None)   
+                ax.plot(R, best_fit2halo, **best_fit_plot_kwargs)
+    if show_error_bars == True:
+        ax.errorbar(R, data, yerr = err, **data_plot_kwargs)
+    else:
+        data_plot_kwargs.pop("capsize", None)
+        data_plot_kwargs["marker"] = data_plot_kwargs["fmt"]
+        data_plot_kwargs.pop("fmt", None)
+        ax.scatter(R, data, **data_plot_kwargs)
+    if plot_bounds == True and plot_median == True:
         if signal is None:
             lower_bound = model(R,np.array(params) - np.array(lower)) if lower_bound is None else np.array(lower_bound)
             upper_bound = model(R,np.array(params) + np.array(upper)) if upper_bound is None else np.array(upper_bound)
         elif signal is not None:
             lower_bound, upper_bound = np.nanpercentile(signal, [16,84], axis = 0)
             fit = np.nanmedian(signal, axis = 0)
-        if show_error_bars == True:
-            ax.errorbar(R, data, yerr = err, **data_plot_kwargs)
-        else:
-            data_plot_kwargs.pop("capsize", None)
-            data_plot_kwargs["marker"] = data_plot_kwargs["fmt"]
-            data_plot_kwargs.pop("fmt", None)
-            ax.scatter(R, data, **data_plot_kwargs)
+
         ax.plot(R, fit, **fit_plot_kwargs)
         bounds_plot_kwargs = set_default(kwargs.pop("bounds_plot_kwargs",{}), default_bounds_plot_kwargs)
         ax.fill_between(R, lower_bound, upper_bound, **bounds_plot_kwargs)
-        if P1halo is not None:
-            if np.all(np.isnan(P1halo)) == False:
-                P1halo = np.nanmedian(P1halo, axis = 0)
-                fit_plot_kwargs["ls"] = "dashed"
-                fit_plot_kwargs["label"] = r"1h"
-                fit_plot_kwargs["alpha"] = 0.5
-                ax.plot(R, P1halo, **fit_plot_kwargs)
-        if P2halo is not None:
-            if np.all(np.isnan(P2halo)) == False:
-                P2halo = np.nanmedian(P2halo, axis = 0)
-                fit_plot_kwargs["ls"] = "dotted"
-                fit_plot_kwargs["label"] = r"2h"
-                fit_plot_kwargs["alpha"] = 0.5
-                ax.plot(R, P2halo, **fit_plot_kwargs)
+        if plot_1h2h == True:
+            if P1halo is not None:
+                if np.all(np.isnan(P1halo)) == False:
+                    P1halo = np.nanmedian(P1halo, axis = 0)
+                    fit_plot_kwargs["ls"] = "dashed"
+                    fit_plot_kwargs["label"] = r"1h"
+                    fit_plot_kwargs["alpha"] = 0.5
+                    ax.plot(R, P1halo, **fit_plot_kwargs)
+            if P2halo is not None:
+                if np.all(np.isnan(P2halo)) == False:
+                    P2halo = np.nanmedian(P2halo, axis = 0)
+                    fit_plot_kwargs["ls"] = "dotted"
+                    fit_plot_kwargs["label"] = r"2h"
+                    fit_plot_kwargs["alpha"] = 0.5
+                    ax.plot(R, P2halo, **fit_plot_kwargs)
     if show_results == True:
         if specific_chi2 is not None and specific_pte is not None:
             text  = [
@@ -2377,7 +2624,7 @@ def plot_cov_matrix(chain, labels, output_file = None, corr = False, norm = "lin
         output_file_pvalue = output_file.split(".")[0] + "_pvalues." + output_file.split(".")[1]
         fig.tight_layout()
         fig.savefig(output_file_pvalue)
-def plot_tau(backend, labels, output_file = None, fig = None, ax = None, show_convergence = False, Nbins = 20, **kwargs):
+def plot_tau(chain_unflatten, labels, output_file = None, fig = None, ax = None, show_convergence = False, Nbins = 20, **kwargs):
     default_fig_kwargs = (
         ("figsize", (24, 2*len(labels))),
         ("sharex", True),
@@ -2409,9 +2656,9 @@ def plot_tau(backend, labels, output_file = None, fig = None, ax = None, show_co
         fig = ax.get_figure()
     N_arr, tau_arr = [],[]
     for i in range(len(axes)):
-        chain_unflatted = backend.get_chain()[:,:, i].T
+        schain = chain_unflatten[:,:, i].T
         ax = axes[i]
-        N,tau = autocorr_time_from_chain(chain_unflatted, Nbins)
+        N,tau = autocorr_time_from_chain(schain, Nbins)
         N_arr.append(N)
         tau_arr.append(tau)
         ax.loglog(N, tau, label = r"$\tau $ estimation", **tau_plot_kwargs)

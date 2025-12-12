@@ -1619,11 +1619,7 @@ class grouped_clusters(AutoCastAttr):
             os.mkdir(self.output_path)
         if only_plot == False:
             if ymap is None or mask is None or clusters_mask is None:
-                self.load_map_and_mask()
-                ymap = self.map
-                mask = self.mask
-                clusters_mask = self.clusters_mask
-
+                ymap, mask, clusters_mask = self.load_map_and_mask()
             R_bins = np.array([(R_profiles[i] + R_profiles[i + 1])/2 for i in range(len(R_profiles) - 1)])
             print(f"Running stacking algorithm with {n_pool} N_cores") if n_pool > 1 else None
             maps_array = np.array(self.imap)
@@ -1711,6 +1707,7 @@ class grouped_clusters(AutoCastAttr):
                 self.background_field = background
             if weighted == True:
                 weighted_map = maps_array
+                print(np.shape(self.mask))
                 w_mask = np.sum(self.mask, axis = (1,2))
                 if weights_kwargs["use_SNr"] == True:
                     snrs = np.sum(self.profiles, axis = 1)/np.sqrt(np.sum(self.errors**2, axis = 1)) if hasattr(self, "covs") == False else np.sqrt(
@@ -2360,37 +2357,135 @@ class grouped_clusters(AutoCastAttr):
             output_data[1] = self.mean_profile
             output_data[2] = self.error_in_mean
             np.save(f"{self.output_path}/mean_profile.npy", output_data)
-        if file_format == "h5":
-            available_data = list(self.__dict__.keys())
-            with h5py.File(f"{self.output_path}/data.h5", "w") as f:
-                for k in available_data:
-                    if k != "dtype" and k != "wcs":
-                        try:
-                            if type(getattr(self, k)) is float:
-                                f.create_dataset(k, data = getattr(self, k), dtype = dtype)
-                            elif type(getattr(self, k)) is str:
-                                f.create_dataset(k, data = str(getattr(self, k)), dtype = str)
-                            else:
-                                if getattr(self, k) is not None:
-                                    f.create_dataset(k, data = getattr(self, k), dtype = getattr(self, k).dtype)
-                        except ValueError:
-                            dt = h5py.special_dtype(vlen=float) if type(k) == float else h5py.special_dtype(vlen=str)
-                            f.create_dataset(k, data = getattr(self, k), dtype = dt)
-                        except AttributeError:
-                            f.create_dataset(k, data = getattr(self, k))
-                            try:
-                                f.create_dataset(k, data = getattr(self, np.array(k, dtype = str)), dtype = str)
-                            except:
-                                print(f"An exception has ocurred trying to store {k} attribute!")
-                        except TypeError:
-                            print(f"An exception has ocurred trying to store {k} attribute!")
+            if file_format == "h5":
+                available_data = list(self.__dict__.keys())
+                h5_path = f"{self.output_path}/data.h5"
+                if os.path.exists(h5_path):
+                    os.remove(h5_path)
+                with h5py.File(h5_path, "w") as f:
+                    for k in available_data:
+                        if k in ("dtype",):
                             continue
-                        pass
-                    elif k == "wcs":
-                        wcs = getattr(self, k)
-                        header_str = wcs.to_header().tostring(sep="\n")
-                        dt = h5py.string_dtype(encoding="utf-8")       # <--- important
-                        f.create_dataset("wcs_header", data=header_str, dtype=dt)
+                        if k == "wcs":
+                            wcs = getattr(self, k)
+                            header_str = wcs.to_header().tostring(sep="\n")
+                            dt = h5py.string_dtype(encoding="utf-8")
+                            f.create_dataset("wcs_header", data=header_str, dtype=dt)
+                            continue
+                        try:
+                            val = getattr(self, k)
+                        except Exception as e:
+                            continue
+                        if val is None:
+                            try:
+                                f.create_dataset(k, data=np.array([]))
+                            except Exception:
+                                pass
+                            continue
+                        if isinstance(val, (int, float, bool, np.integer, np.floating, np.bool_)):
+                            try:
+                                out_dtype = dtype_default if dtype_default is not None else np.array(val).dtype
+                                f.create_dataset(k, data=val, dtype=out_dtype)
+                            except Exception as e:
+                                dt = h5py.string_dtype(encoding="utf-8")
+                                f.create_dataset(k, data=str(val), dtype=dt)
+                            continue
+                        if isinstance(val, str):
+                            dt = h5py.string_dtype(encoding="utf-8")
+                            f.create_dataset(k, data=val, dtype=dt)
+                            continue
+                        if isinstance(val, np.ndarray):
+                            try:
+                                f.create_dataset(k, data=val, dtype=val.dtype)
+                            except Exception as e:
+                                try:
+                                    dt = h5py.vlen_dtype(val.dtype)
+                                    f.create_dataset(k, data=val, dtype=dt)
+                                except Exception as e2:
+                                    dt = h5py.string_dtype(encoding="utf-8")
+                                    f.create_dataset(k, data=np.array(repr(val), dtype=object), dtype=dt)
+                            continue
+                        if isinstance(val, (list, tuple)):
+                            if all(isinstance(x, np.ndarray) for x in val):
+                                shapes = [x.shape for x in val]
+                                if all(s == shapes[0] for s in shapes):
+                                    try:
+                                        stacked = np.stack(val)
+                                        f.create_dataset(k, data=stacked, dtype=stacked.dtype)
+                                    except Exception:
+                                        if k in f: 
+                                            del f[k]  
+                                        grp = f.create_group(k)
+
+                                        for i, arr in enumerate(val):
+                                            try:
+                                                grp.create_dataset(str(i), data=arr, dtype=arr.dtype)
+                                            except Exception:
+                                                grp.create_dataset(str(i), data=np.array(arr, dtype=object))
+                                else:
+                                    if k in f:
+                                        del f[k]    
+                                    grp = f.create_group(k)
+
+                                    for i, arr in enumerate(val):
+                                        try:
+                                            grp.create_dataset(str(i), data=arr, dtype=arr.dtype)
+                                        except Exception:
+                                            try:
+                                                arr = np.asanyarray(arr)
+                                                dt = h5py.vlen_dtype(arr.dtype)
+                                                grp.create_dataset(str(i), data=arr, dtype=dt)
+                                            except Exception:
+                                                grp.create_dataset(str(i), data=str(arr))
+                                continue
+
+                            try:
+                                arr = np.array(val)
+                                if arr.dtype.kind in ("U", "S", "O"):
+                                    dt = h5py.string_dtype(encoding="utf-8")
+                                    f.create_dataset(k, data=arr.astype(str), dtype=dt)
+                                else:
+                                    f.create_dataset(k, data=arr, dtype=arr.dtype)
+                            except Exception:
+                                if k in f:
+                                    del f[k]
+                                grp = f.create_group(k)
+                                for i, item in enumerate(val):
+                                    try:
+                                        grp.create_dataset(str(i), data=item)
+                                    except Exception:
+                                        grp.create_dataset(str(i), data=str(item),
+                                                        dtype=h5py.string_dtype(encoding="utf-8"))
+                            continue
+
+                        if isinstance(val, dict):
+                            if k in f:
+                                grp = f[k]
+                            else:
+                                grp = f.create_group(k)
+                            for subk, subv in val.items():
+                                subname = str(subk)
+                                try:
+                                    if isinstance(subv, str):
+                                        dt = h5py.string_dtype(encoding="utf-8")
+                                        grp.create_dataset(subname, data=subv, dtype=dt)
+                                    else:
+                                        grp.create_dataset(subname, data=subv)
+                                except Exception:
+                                    try:
+                                        grp.create_dataset(subname, data=str(subv), dtype=h5py.string_dtype(encoding="utf-8"))
+                                    except Exception:
+                                        print(f"Could not store dict element {k}/{subk}")
+                            continue
+                        try:
+                            f.create_dataset(k, data=val)
+                        except Exception as e:
+                            try:
+                                dt = h5py.string_dtype(encoding="utf-8")
+                                f.create_dataset(k, data=str(val), dtype=dt)
+                            except Exception:
+                                print(f"Failed to store attribute {k}: {e}")
+                                continue
     def mass_richness_func(self, pivot=40, slope=1.29, normalization=10**14.45):
         return lambda l: (normalization * (l / pivot) ** slope)
 
@@ -2681,8 +2776,8 @@ class grouped_clusters(AutoCastAttr):
                 if verbose:
                     print("Assuming a Dirac delta function for P(z_lambda| z)!")
                 z_lambda = self.z #observed redshift (i.e z_lambda)
-                z_arr = z_arr[np.where((z_arr >= np.min(z_lambda)) & (z_arr <= np.max(z_lambda)))]
-                prob_distribution = prob_distribution[:, :, np.where((z_arr >= np.min(z_lambda)) & (z_arr <= np.max(z_lambda)))[0]]
+                z_arr = z_arr[np.where((z_arr >= self.redshift_bin[0]) & (z_arr <= self.redshift_bin[1]))]
+                prob_distribution = prob_distribution[:, :, np.where((z_arr >= self.redshift_bin[0]) & (z_arr <= self.redshift_bin[1]))[0]]
             else:
                 z_lambda = Pzlambda_kwargs["z_lambda"] if Pzlambda_kwargs["z_lambda"] is not None else np.arange(self.z.min(), self.z.max() + 0.05, 0.05)
                 self.z_lambda = z_lambda
@@ -2749,7 +2844,6 @@ class grouped_clusters(AutoCastAttr):
         mfunc = ccl.halos.mass_function_from_name("Tinker10") #mass function from Tinker et al 2010
         mfunc = mfunc(cosm, mdef)
         dndM = np.array([[mfunc(cosm, mi, ai) for mi in M ] for ai in a]) #dN/dM
-        dndM = dndM * 1/(M * np.log(10)) #convert from log10
         self.dndM = dndM
         print(20*"==")
         if verbose:
@@ -2850,11 +2944,8 @@ class grouped_clusters(AutoCastAttr):
             mask = hp.read_map(self.mask_path)
         
 
-        clusters_mask = hp.fitsfunc.read(self.clusters_mask_path) if clusters_mask_format == 'healpy' else enmap.read_map(self.clusters_mask_path)
+        clusters_mask = hp.fitsfunc.read_map(self.clusters_mask_path) if clusters_mask_format == 'healpy' else enmap.read_map(self.clusters_mask_path)
         
-        self.map = m.astype(self.dtype)
-        self.mask = mask.astype(self.dtype)
-        self.clusters_mask = clusters_mask.astype(self.dtype)
         return m, mask, clusters_mask
     def stacked_halo_model_func(self, one_halo_profile,units = "arcmin", pix_size = 0.5, rbins = 25, zbins = 11, Mbins = 10,
                                 filters = None, use_filters = False, use_two_halo_term = False, fixed_RM_relationship = True,
@@ -2864,7 +2955,7 @@ class grouped_clusters(AutoCastAttr):
                                 delta = 500, background = "critical", pyccl_cosmo = None, eval_mass = False, 
                                 apply_filter_per_profile = False, return_1h2h = False, infere_mass = False,
                                 redshift_pivot = 0.4737, richness_pivot = 32.68, weighted = True, 
-                                subr_grid = True, **kwargs):   
+                                subr_grid = True, compute_completeness = False, **kwargs):   
 
         from astropy.cosmology import Planck18 as planck18
 
@@ -2905,6 +2996,7 @@ class grouped_clusters(AutoCastAttr):
             ("Roff", np.linspace(0, 2, 30)),
             ("distribution", lambda x,sigma: x/sigma**2*np.exp(-x**2/(2*sigma**2))),
             ("params", [0.245, 0.354]),
+            ('func', None),
             ("theta", np.linspace(0, 2*np.pi, 30))
         )
 
@@ -2916,7 +3008,7 @@ class grouped_clusters(AutoCastAttr):
             ("z_arr", np.linspace(1e-3,1, 20)),
             ("cosmo", ccl.CosmologyVanillaLCDM()),
             ("delta", delta),
-            ("two_halo_power_func", lambda z, params: np.full(z.shape,params[0])),
+            ("two_halo_power_func", lambda z, p: np.full(z.shape,p[0])),
             ("eval_only_mass", False),
             ("eval_only_richness", False),
             ("eval_only_redshift", True),    
@@ -2954,7 +3046,7 @@ class grouped_clusters(AutoCastAttr):
         subr_grid_kwargs = set_default(kwargs.pop("subr_grid_kwargs", {}), default_subr_grid_kwargs)
         #pre-compute completeness and halo mass function
         use_redshift = compl_kwargs["use_redshift"]
-        if hasattr(self, "completeness_kwargs") == False:
+        if hasattr(self, "completeness_kwargs") == False or compute_completeness == True:
             self.completeness_and_halo_func(**compl_kwargs)
         else:
             cond = [compl_kwargs[k] == v for k,v in self.completeness_kwargs.items() if k in list(compl_kwargs.keys())]
@@ -3014,7 +3106,7 @@ class grouped_clusters(AutoCastAttr):
         Wr = richness_weights_function_kwargs["func"]
         params = richness_weights_function_kwargs["params"]
 
-        dV = Wz(z_arr)*cosmo.differential_comoving_volume(z_arr).to(u.kpc**3 / u.sr)
+        dV = cosmo.differential_comoving_volume(z_arr)
         if (use_two_halo_term is not None) and type(use_two_halo_term) in (str, bool):
             if use_two_halo_term == True or use_two_halo_term == "only":
                 if verbose:
@@ -3052,6 +3144,7 @@ class grouped_clusters(AutoCastAttr):
         if mis_centering == True:
             Roff = np.array(mis_centering_kwargs["Roff"])[:, None] #Roff of mis-centering
             rho_Roff = mis_centering_kwargs["distribution"] #p(Roff)
+            mis_centering_func = mis_centering_kwargs["func"]
             theta = mis_centering_kwargs["theta"]
             print("Adding\033[92m mis-centering\033[0m") if verbose else None
 
@@ -3114,14 +3207,13 @@ class grouped_clusters(AutoCastAttr):
                     np.trapz(
                         np.trapz(PllM*weights[None,:,None,:], axis = 0, x = lambda_true), axis = 0, x = lambda_obs
                         ), axis = 0, x = M)
-                    , axis = 0, x = z_arr) 
-
-        self.norm = norm
+                    , axis = 0, x = z_arr)
+        self.norm = norm.to(u.Mpc**3/u.sr).value
         global func
         def func(r, params, RM_params = None, new_PllM = None, new_sigmaRM = None, rbins = 35, new_Plambda_true = None, 
                 smooth = None, eval_lambda = True, mis_centering_params = None, Roff = np.logspace(-1, 1, 10), return_2halo_term = False,
                 theta = np.linspace(0,2*np.pi,60), mass2richness_Pivot = 3e14/0.7, mass2richness_Pivot_redshift = 0.35
-                , sigmaRM = 0.25, two_halo_power = None, return_profile_grid = False, R_intp = None):
+                , sigmaRM = 0.25, two_halo_power = [1], return_profile_grid = False, R_intp = None):
             if subr_grid == True:
                 R = subR_grid
             else:
@@ -3215,7 +3307,7 @@ class grouped_clusters(AutoCastAttr):
                 P2halo = np.trapz(np.trapz(weighted_two_halo_term, axis = 0, x = lambda_true), axis = 1, x = lambda_obs)
 
             P1halo = trapz(trapz(weighted_one_halo_term, axis = 1, x = lambda_true), axis = 1, x = lambda_obs) #integrate over the observed richness
-            if hasattr(self, "two_halo_func_evals") and two_halo_power is not None:
+            if hasattr(self, "two_halo_func_evals") and two_halo_power is not None and use_two_halo_term == True:
                 if self.two_halo_func_evals[0] == False and self.two_halo_func_evals[1] == False and self.two_halo_func_evals[2] == True:
                     z_grid2, M_grid2 = np.meshgrid(z_arr, M)
                     z_unique, z_index = np.unique(z_grid2, return_inverse = True)
@@ -3231,13 +3323,18 @@ class grouped_clusters(AutoCastAttr):
             if return_profile_grid == True:
                 return PRMz
 
-            output = np.zeros((len(PRMz), len(r)), dtype = float_dtype)
+            output = np.zeros((2, len(R))) if return_1h2h == True else np.zeros((1, len(R)))
             infered_Mass = 0
             for k, P in enumerate(PRMz):
                 if mis_centering == True and mis_centering_params is not None:
-                    fmis, mis_centering_params_func = mis_centering_params[0], mis_centering_params[1::] if mis_centering_params is not None else [0.246, 0.385]
+                    if len(mis_centering_params) == 2:
+                        fmis, mis_centering_params_func = mis_centering_params[0], mis_centering_params[1::] if mis_centering_params is not None else [0.246, 0.385]
+                    elif len(mis_centering_params) > 2 and mis_centering_func is not None:
+                    
+                        M2, z2 = np.meshgrid(M, z_arr)
+                        p = mis_centering_func(M2, z2, mis_centering_params)
+                        fmis, mis_centering_params_func = p[0], p[1::]
                     weights = np.array(rho_Roff(Roff, *mis_centering_params_func), dtype = float_dtype)
-
                     funcs = [
                     [UnivariateSpline(R_Mpc_mis[:,i,j], pj, k=1, s=0) for j,pj in enumerate(pi)] for i,pi in enumerate(P.T)
                     ]
@@ -3245,7 +3342,7 @@ class grouped_clusters(AutoCastAttr):
                         [[np.trapz(fj(xmis[:,:,:,i,j]), theta, axis=0) for j,fj in enumerate(fi)] for i,fi in enumerate(funcs)]
                     )
                     woff = np.array(
-                        [[np.trapz(weights[:,None] * off[i,j,:,:], Roff, axis = 0)/np.trapz(weights, Roff) for j,pj in enumerate(pi)] 
+                        [[np.trapz(weights[...,None] * off[i,j,:,:], Roff, axis = 0)/np.trapz(weights, Roff) for j,pj in enumerate(pi)] 
                         for i,pi in enumerate(off)]
                     )
                     P = (1 - fmis)*P + fmis*woff.T/(2*np.pi)
@@ -3324,12 +3421,12 @@ class grouped_clusters(AutoCastAttr):
                 return Ptotal
         return func
 
-    def create_beam_filter(self, mode = "a"):
+    def create_beam_filter(self, mode = "a", beam_size = 1.6):
         output_path = self.output_path
         content = f"""
 from scipy.ndimage import gaussian_filter1d
 import numpy as np
-def apply_beam(R, data, fwhm = 1.6):
+def apply_beam(R, data, fwhm = {beam_size}):
     fwhm = float(fwhm)
     sigma = fwhm / (2 * np.sqrt(2 * np.log(2)))
     dr = (R[-1] - R[0]) / (len(R) - 1)
@@ -4031,6 +4128,205 @@ def bootstrap_worker(R_profiles, maps, N_total, counter, width):
     sys.stdout.flush()
     return mean_profiles
 
+
+from matplotlib.patches import Circle
+
+def plot_profiles(path, sort = True, figsize = (8,8)):
+    ignore = np.loadtxt(path + "/ignore.txt", dtype = str).T
+    clusters_list = [path + p for p in os.listdir(path) if p not in ignore and os.path.isdir(path + p)]
+    clusters = [grouped_clusters.load_from_path(p) for p in clusters_list]
+    if sort == True:
+        bins = np.array([[*c.richness_bin, *c.redshift_bin] for c in clusters])
+        sorted_idx = np.lexsort((bins[:,3], bins[:,2], bins[:,1], bins[:,0]))
+        clusters = [clusters[i] for i in sorted_idx]
+    fig, axes = plt.subplots(2,2,figsize = figsize, sharex = "col", sharey = "row")
+    axes = axes.flatten()
+    count = 0
+    FWHM = 1.6
+    sigma = FWHM / 2.355
+    for i in range(0,len(clusters), 2):
+        ax = axes[count]
+        count+=1
+        p1 = clusters[i].mean_profile
+        p2 = clusters[i+1].mean_profile
+        R = clusters[i].R
+        e1 = clusters[i].error_in_mean
+        e2 = clusters[i+1].error_in_mean
+        r = np.arange(np.min(R), np.max(R), 0.01)
+        beam = np.max(p1)*np.exp(-r**2/(2*sigma**2))
+        richness_bin = clusters[i].richness_bin
+        redshift_bin1 = clusters[i].redshift_bin
+        redshift_bin2 = clusters[i+1].redshift_bin
+        ax.errorbar(R, p1, yerr = e1, color = "darkgreen", fmt = "o", label = r"$z\in [%.2f, %.2f]$" % (redshift_bin1[0], redshift_bin1[1]))
+        ax.errorbar(R + 0.1, p2, yerr = e2, color = "purple", fmt = "o", label = r"$z\in [%.2f, %.2f]$" % (redshift_bin2[0], redshift_bin2[1]))
+        ax.fill_between(R, p1 - e1, p1 + e1, color = "darkgreen", alpha = 0.2)
+        ax.fill_between(R + 0.1, p2 - e2, p2 + e2, color = "purple", alpha = 0.2)
+        
+        ax.plot(r, beam, ls = "--", color = "darkblue", lw = 3, alpha = 0.4, label = "ACT beam")
+
+        ax.set_title(r"$\lambda \in [%.i, %.i]$" % (richness_bin[0], richness_bin[1]))
+        if i == 2 or 3:
+            ax.set(xlabel = "R (arcmin)")
+        if i == 0 or 2:
+            ax.set(ylabel = r"$\langle y\rangle$")
+        ax.set_yscale("log")
+        ax.set_ylim( np.min(p2[p2 > 0])*0.1, np.max(p1)*3)
+    
+    axes[0].legend(frameon = False, fontsize = 8, loc = "upper right")
+    return fig
+def plot_signal(path, sort = True, figsize = (8, 16), plot_corr = False, patch_size = 0.6, cmap = "coolwarm", share_colorbar = False
+                , lw = 1.5, color = "black", xlim = None, ylim = None):
+    
+    ignore = np.loadtxt(path + "/ignore.txt", dtype = str).T
+    clusters_list = [path + p for p in os.listdir(path) if p not in ignore and os.path.isdir(path + p)]
+    clusters = [grouped_clusters.load_from_path(p) for p in clusters_list]
+    if sort == True:
+        bins = np.array([[*c.richness_bin, *c.redshift_bin] for c in clusters])
+        sorted_idx = np.lexsort((bins[:,3], bins[:,2], bins[:,1], bins[:,0]))
+        clusters = [clusters[i] for i in sorted_idx]
+    
+    richness_bins = np.unique([c.richness_bin for c in clusters], axis = 0)
+    redshift_bins = np.unique([c.redshift_bin for c in clusters], axis = 0)
+    fig = plt.figure(figsize=figsize)
+    gs = gridspec.GridSpec(nrows=len(richness_bins), ncols=len(redshift_bins), hspace=0.5, wspace=0.3, top = 0.9)
+    count = 0
+    axes = []
+    if share_colorbar == True:
+        vmin = np.min([c.stacked_map for c in clusters])
+        vmax = np.max([c.stacked_map for c in clusters])
+    else:
+        vmin = None
+        vmax = None
+    for i in range(len(richness_bins)):
+        axes.append([])
+        for j in range(len(redshift_bins)):
+            ax = fig.add_subplot(gs[i,j])
+            axes[-1].append(ax)
+            c = clusters[count]
+            extent = np.array([-patch_size, patch_size, -patch_size, patch_size])/2 * 60
+            im = ax.imshow(c.stacked_map, cmap = cmap, origin = "lower", 
+                            aspect = "auto", extent = extent
+                            , vmin = vmin, vmax = vmax)
+            count+=1
+            cax = fig.add_axes([ax.get_position().x0,
+                    ax.get_position().y1 + 0.01,
+                    ax.get_position().width,
+                    0.015])
+            cbar = plt.colorbar(im, cax = cax, orientation = "horizontal")
+            cbar.ax.xaxis.set_ticks_position('top')
+            cbar.ax.xaxis.set_label_position('top')
+            cbar.ax.tick_params(labelsize=8, top=True, bottom=False)
+            cbar.set_label(r"$y$", fontsize=9, labelpad=3)
+
+            if i == len(richness_bins) - 1:
+                ax.set_xlabel(r"$\Delta$RA (arcmin)", fontsize = 8)
+            if j == 0:
+                ax.set_ylabel(r"$\Delta$DEC (arcmin)", fontsize = 8)
+            ax.axvline(0, color = color, linewidth = lw, alpha = 0.7, ls = "--")
+            ax.axhline(0, color = color, linewidth = lw, alpha = 0.7, ls = "--")
+            circle = Circle((0,0), radius=1.6, color=color, fill=False, lw=lw, alpha = 0.7, ls = "--")
+            ax.add_patch(circle)
+            if xlim is not None:
+                ax.set_xlim(xlim)
+            if ylim is not None:
+                ax.set_ylim(ylim)
+    axes = np.array(axes)
+    for i, richness in enumerate(richness_bins):
+        axes[i, 0].text(-0.225, 0.5, r"$\lambda \in [%.i, %.i]$" % tuple(richness), va='center', ha='right',
+                        rotation=90, fontsize=12, transform=axes[i, 0].transAxes)
+
+    for j, z in enumerate(redshift_bins):
+        pos = axes[0, j].get_position()
+        fig.text((pos.x0 + pos.x1) / 2, 0.95, r"$z \in [%.2f, %.2f]$" % tuple(z), ha='center', va='bottom', fontsize=12)
+    return fig
+
+def plot_cib_comparison(R_profiles, width = 0.6):
+    from plottery.plotutils import update_rcParams
+    update_rcParams()
+    
+    paths = [
+        "/data2/javierurrutia/szeffect/data/ycompton-no-CIB-deproj/",
+        "/data2/javierurrutia/szeffect/data/ycompton-deproj-cib_1.0_10.7/",
+        "/data2/javierurrutia/szeffect/data/ycompton-deproj-cib_1.2_10.7/",
+        "/data2/javierurrutia/szeffect/data/ycompton-deproj-cib_1.7_10.7/",
+        "/data2/javierurrutia/szeffect/data/ycompton-deproj-cib_2.0_10.7/"
+    ]
+    labels = [
+        "no CIB deprojection",
+        r"$\beta = 1.0$", 
+        r"$\beta = 1.2$", 
+        r"$\beta = 1.7$", 
+        r"$\beta = 2.0$"
+    ]
+
+    data = [grouped_clusters.load_from_path(path + "entire_sample") for path in paths]
+    richness_bins = [[20, 40], [40, 60], [60, 100], [100, 350]]
+    redshift_bins = [[0.1, 0.4], [0.4, 1]]
+    fig, axes = plt.subplots(2,4, figsize = (16, 8), sharex = "col", sharey = "row")
+    profiles = np.zeros((len(redshift_bins), len(richness_bins), len(data), len(R_profiles)-1))
+    sigma = np.zeros((len(redshift_bins), len(richness_bins), len(data), len(R_profiles)-1))
+    colors = ["black", "darkgreen", "darkblue", "darkred", "darkorange"]
+    for i in range(len(richness_bins)):
+        for j in range(len(data)):
+            dj = data[j]
+            ax1, ax2 = axes[0, i], axes[1, i]
+            sub_group = dj.sub_group(richness_interval = richness_bins[i])
+            dj1 = sub_group.sub_group(redshift_interval = redshift_bins[0])
+            dj2 = sub_group.sub_group(redshift_interval = redshift_bins[1])
+            szmap1 = np.average(dj1.szmap, axis = 0)
+            szmap2 = np.average(dj2.szmap, axis = 0)
+            R_bins, prof1, err1, arrs = radial_binning2(szmap1, R_profiles, width = width, full = True)
+            R_bins, prof2, err2, arrs = radial_binning2(szmap2, R_profiles, width = width, full = True)
+            if labels[j] == "no CIB deprojection":
+                ax1.errorbar(R_bins + j*0.25, prof1, yerr = err1, label = labels[j], capsize = 2, 
+                alpha = 0.8, ls = "solid", color = colors[j], lw = 3)
+                ax2.errorbar(R_bins + j*0.25, prof2, yerr = err2, label = labels[j], capsize = 2, 
+                alpha = 0.8, ls = "solid", color = colors[j], lw = 3)
+            else:
+                ax1.errorbar(R_bins + j*0.25, prof1, yerr = err1, label = labels[j], capsize = 2, 
+                alpha = 0.8, ls = "--", color = colors[j])
+                ax2.errorbar(R_bins + j*0.25, prof2, yerr = err2, label = labels[j], capsize = 2, 
+                alpha = 0.8, ls = "--", color = colors[j])
+            ax1.set_title(r"$\lambda \in [%.i, %.i]$" % tuple(richness_bins[i]))
+            ax2.set(xlabel = "R (arcmin)")
+            if i == 0:
+                ax1.set(ylabel = "y profile")
+                ax2.set(ylabel = "y profile")  
+            ax1.set_yscale("log")
+            ax2.set_yscale("log")
+
+            profiles[0, i, j, : ] = prof1
+            profiles[1, i, j, : ] = prof2
+            sigma[0, i, j, : ] = err1
+            sigma[1, i, j, : ] = err2
+    axes[0,0].legend(loc = "best", fontsize = 8, frameon = False)
+    for j, z in enumerate(redshift_bins):
+        pos = axes[j,0].get_position()
+        fig.text(0.04, (pos.y0 + pos.y1) / 2, r"$z \in [%.2f, %.2f]$" % tuple(z), ha='center', 
+        va='center', fontsize=14, rotation = 90)
+    
+    ref = profiles[:,:,0,:]
+    sigma_ref = sigma[:,:,0,:]
+    fig2, axes2 = plt.subplots(2,4, figsize = (16, 8), sharex = "col", sharey = "row")
+    for i in range(len(richness_bins)):
+        for j in range(1, len(data)):
+            ax1, ax2 = axes2[0, i], axes2[1, i]
+            delta_sigma1 = (profiles[0,i,j] - ref[0,i]) / np.sqrt(sigma_ref[0, i]**2 + sigma[0,i,j]**2)
+            delta_sigma2 = (profiles[1,i,j] - ref[1,i]) / np.sqrt(sigma_ref[1, i]**2 + sigma[1,i,j]**2)
+            ax1.plot(R_bins, delta_sigma1, label = labels[j], alpha = 0.8, lw = 3, color = colors[j])
+            ax2.plot(R_bins, delta_sigma2, label = labels[j], alpha = 0.8, lw = 3, color = colors[j])
+            if i == 0:
+                ax1.set_ylabel(r"difference in $\sigma$")
+                ax2.set_ylabel(r"difference in $\sigma$")
+            ax1.set_title(r"$\lambda \in [%.i, %.i]$" % tuple(richness_bins[i]))
+            ax2.set(xlabel = "R (arcmin)")
+    axes2[-1,-1].legend(loc = "best", fontsize = 8, frameon = False)
+    for j, z in enumerate(redshift_bins):
+        pos = axes[j,0].get_position()
+        fig2.text(0.04, (pos.y0 + pos.y1) / 2, r"$z \in [%.2f, %.2f]$" % tuple(z), ha='center', 
+        va='center', fontsize=14, rotation = 90)
+              
+    return fig, fig2
 
 # path = "/data2/javierurrutia/szeffect/data/ycompton-no-CIB-deproj/entire_sample"
 # c = grouped_clusters.load_from_path(path)

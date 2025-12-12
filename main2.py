@@ -262,6 +262,11 @@ def main():
                         mis_centering_kwargs[k] = np.array(arr, dtype = float_dtype)
                 elif "dict" in mis_centering_kwargs[k]:
                     mis_centering_kwargs[k] = eval(mis_centering_kwargs[k])
+                else:
+                    mis_centering_kwargs[k] = mis_centering_kwargs[k]
+
+        if "func" in list(mis_centering_kwargs.keys()):
+            mis_centering_kwargs["func"] = getattr(profiles_module, mis_centering_kwargs["func"])
         fixed_mis_centering = mis_centering_kwargs["fixed"]
         if fixed_mis_centering == True and use_mis_centering == True:
             mis_centering_params = [float(mis_centering_kwargs["fmis"]), *mis_centering_kwargs["params"]]
@@ -348,7 +353,6 @@ def main():
             Mbins = int(Mbins)
 
             debug = True if is_running_via_nohup() == True else args.debug
-
             func = clusters.stacked_halo_model_func(getattr(profiles_module, profile_stacked_model), 
                                                     rbins = rbins, zbins = zbins, Mbins = Mbins,
                                                     use_filters = use_filters, filters = filters_dict,
@@ -822,7 +826,6 @@ def main():
             Mbins = int(Mbins)
 
             debug = True if is_running_via_nohup() == True else args.debug
-
             func,cov, about_clusters, clusters, _, funcs = grouped_clusters.stacked_halo_model_func_by_paths(getattr(profiles_module, profile_stacked_model),
                                                 full = True, Mbins = Mbins, Rbins = rbins, Zbins = zbins, paths = paths,
                                                 verbose_pivots = True, rotate_cov = rotate_cov_matrix, use_filters = use_filters, filters = filters_dict,
@@ -830,7 +833,8 @@ def main():
                                                 two_halo_kwargs = two_halo_kwargs, use_mis_centering = use_mis_centering, fixed_RM_relationship = fixed_halo_model
                                                 , background = background, delta = delta, eval_mass = eval_mass, apply_filter_per_profile = apply_filter_per_profile
                                                 ,rebinning = use_rebinning, rebinning_kwargs = rebinning_kwargs, return_1h2h = store_two_halo_term,
-                                                infere_mass = infere_mass, verbose = debug, subr_grid = subr_grid, subr_grid_kwargs = subr_grid_kwargs,)
+                                                infere_mass = infere_mass, verbose = debug, subr_grid = subr_grid, subr_grid_kwargs = subr_grid_kwargs,
+                                                mis_centering_kwargs = mis_centering_kwargs)
 
             R = clusters[-1].R
             profiles = np.zeros(len(clusters)*len(R), dtype = np.float32)
@@ -1441,6 +1445,9 @@ def main():
                         mis_centering_kwargs[k] = [float(p)]
                     else:
                         mis_centering_kwargs[k] = str2bool(p, dtype = float)
+                elif k == "func":
+                    mis_centering_kwargs[k] = getattr(profiles_module, mis_centering_kwargs[k])
+                
                 if mis_centering_kwargs[k] in ("True", "False"):
                     mis_centering_kwargs[k] = str2bool(mis_centering_kwargs[k])
                 elif "," in mis_centering_kwargs[k]:

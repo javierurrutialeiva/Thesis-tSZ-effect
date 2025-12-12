@@ -324,12 +324,24 @@ if __name__ == "__main__":
                 p = available_clusters[i]
                 clusters.append(sz_cluster.load_from_path(p))
             g = np.sum(clusters)
-            if os.path.exists(g.output_path) == False:
+            g.output_path = output_path + "entire_sample"
+            try:
                 os.mkdir(g.output_path)
-            g.output_path = output_path + "/entire_sample"
+            except:
+                pass
             #g.compute_covariance_matrices(R_profiles, width)
             g.save()
             g.plot()
+            
+            g.map_path = ymap_path
+            g.wcs = ymap.wcs
+            g.mask_path = mask_path
+            g.catalog = gal_cat_path
+            g.clusters_mask_path = clusters_mask_path
+            g.cib_deprojection = cib_deprojection
+            if cib_deprojection == True:
+                g.cib_dict = cib_dict
+
             g.stacking(R_profiles, plot = True, background_err = False, bootstrap = False, compute_cov_matrix = False, ymap = ymap,
              estimate_covariance = False, estimate_background = False, verbose = True, n_pool = N_cores, 
             mask = mask)
