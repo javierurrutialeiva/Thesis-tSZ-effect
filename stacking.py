@@ -45,11 +45,11 @@ def mask_regions_worker(ra, dec, ymap, size_rad = np.deg2rad(10/60), mask_shape 
             sys.stdout.flush()
 
     if using_pool == True and worker_id is not None:
-        print("Worker ", worker_id, "was already finished!\n")
+        print("Worker ", worker_id, "has already finished!\n")
     return ymap
 
 global extract_cluter_data
-def extract_cluster_data(ymap, ra, dec, z, zerr, richness, richness_err, ID, wcs_info = None, mask = None,
+def extract_cluster_data(ymap, ra, dec, z, zerr, richness, richness_err, ID, R_profiles, wcs_info = None, mask = None,
                 pix_size = 0.5, using_pool = False, patch_size = 0.8, worker_id = None, counter = None, N_total = None
                 ,replace = False, fmask_ratio = 1):
     if os.path.exists(output_path + "individual_clusters") == False: os.mkdir(output_path + "individual_clusters")
@@ -119,13 +119,13 @@ def extract_cluster_data(ymap, ra, dec, z, zerr, richness, richness_err, ID, wcs
             + "/" 
         )
         cluster.ID = str(ID[i])
-        cluster.save()
+        cluster.save(force = True)
         cluster.plot(save = True, plot_signal = True, patchsize = patch_size, pixel_size = pixel_size,
                     show_cluster_information = ["z","richness"], cluster_information_names = ["$z$", r"$\lambda$"])
         clusters.append(cluster)
         plt.close("all")
     if using_pool == True and worker_id is not None:
-        print("Worker ", worker_id, "was already finished!\n")
+        print("Worker ", worker_id, "has already finished!\n")
     return clusters
 
 
@@ -187,7 +187,8 @@ else:
     stacking = config_data.get("stacking", True)
     rewrite = config_data.get("rewrite", False)
     fmask_ratio = config_data.get("fmask_ratio", 1)
-
+    background = config_data.get("background", None)
+    background = scientific2float(background) if background is not None else None
     data_path = config_data.get("data_path", None)
     ymap_path = config_data.get("ymap", None) if data_path is None else data_path + config_data.get("ymap", None)
     mask_path = config_data.get("mask", None) if data_path is None else data_path + config_data.get("mask", None)
@@ -302,9 +303,8 @@ if __name__ == "__main__":
             counter = manager.Value("i", 0 )
             N_total = len(ra)
             pars = np.array_split(np.column_stack((ra, dec, z, zerr, lamda, lamda_err, ID)), N_cores)
-            
             with Pool(N_cores, initializer=init_extract_data, initargs=(ymap, mask)) as pool:
-                pars = [(None, *p.T, wcs_info, None, pixel_size, True, patch_size, i, counter, N_total, rewrite, fmask_ratio) for i,p in enumerate(pars)]
+                pars = [(None, *p.T, R_profiles, wcs_info, None, pixel_size, True, patch_size, i, counter, N_total, rewrite, fmask_ratio) for i,p in enumerate(pars)]
                 res = pool.starmap(extract_cluster_data, pars)
                 pool.close()
                 pool.join()
@@ -367,15 +367,17 @@ if __name__ == "__main__":
         g.cib_deprojection = cib_deprojection
         if cib_deprojection == True:
             g.cib_dict = cib_dict
-
         subgroups = g.split_optimal_richness(R_profiles = R_profiles, method = "stacking", SNr = snr_threshold, rdistance = delta_richness, 
             width = patch_size, N_realizations = 1000, split_by_median_redshift = use_median_redshift, use_bootstrap = use_bootstrap, n_pool = N_cores,
             redshift_bins = redshift_bins, estimate_background = estimate_background, estimate_covariance = estimate_covariance, compute_zero_level = zero_level, 
             ymap = ymap, mask = mask, clusters_mask = clusters_mask, min_richness = min_richness, initial_richness = initial_richness, weighted = weighted
-            , max_richness = max_richness, richness_bins = richness_bins)
+            , max_richness = max_richness, richness_bins = richness_bins, )
         for s in subgroups:
+            s.output_path = output_path + "/" + s.output_path.split("/")[-1]
             if os.path.exists(s.output_path) == False:
                 os.mkdir(s.output_path)
+            if background is not None:
+                s.background = background
             s.save()
             s.plot()
 

@@ -24,6 +24,9 @@ import multiprocessing as mp
 from scipy.ndimage import gaussian_filter1d, gaussian_filter
 from icecream import ic
 
+import numba
+numba.set_num_threads(1)
+
 
 warnings.filterwarnings("ignore")
 
@@ -41,12 +44,6 @@ data_path = config["FILES"]["DATA_PATH"]
 profile_stacked_model = config["STACKED_HALO_MODEL"]["profile"]
 profiles_module = importlib.import_module("profiles")
 MCMC_func = importlib.import_module("MCMC_functions")
-
-completeness_file = config["FILES"]["COMPLETENESS"]
-cosmological_model = dict(config["COSMOLOGICAL MODEL"])
-cosmological_model = {
-    key: float(cosmological_model[key]) for key in list(cosmological_model.keys())
-}
 
 parser = argparse.ArgumentParser()
 
@@ -162,6 +159,28 @@ def main():
             model_config = config["MODEL"]
             blobs_config = config["BLOBS"]
 
+            cosmo_config = config["COSMOLOGY"]
+
+            cosmo_kwargs = dict(
+                Neff = float(cosmo_config["Neff"]) if "Neff" in cosmo_config.keys() else 3.044,
+                Omega_b = float(cosmo_config["Omega_b"]) if "Omega_b" in cosmo_config.keys() else 0.05,
+                Omega_c = float(cosmo_config["Omega_c"]) if "Omega_c" in cosmo_config.keys() else 0.25,
+                h = float(cosmo_config["h"]) if "h" in cosmo_config.keys() else 0.67,
+                n_s = float(cosmo_config["n_s"]) if "n_s" in cosmo_config.keys() else 0.96,
+                sigma8 = float(cosmo_config["sigma8"]) if "sigma8" in cosmo_config.keys() else 0.81,
+            )
+
+            for k in list(cosmo_config.keys()):
+                if k not in list(cosmo_kwargs.keys()):
+                    try:
+                        cosmo_kwargs[k] = float(cosmo_config[k])
+                    except:
+                        cosmo_kwargs[k] = cosmo_config[k]
+        
+            cosmological_model = ccl.Cosmology(**cosmo_kwargs)
+
+            numba = model_config["numba"]
+
             rebinning_config = dict(config["REBINNING"])
 
             use_rebinning = str2bool(model_config["rebinning"])
@@ -169,6 +188,7 @@ def main():
             pixel_size_rebinning = float(rebinning_config["pixel_size"])
             rebinning_method = rebinning_config["method"]
             interpolation_kwargs = eval(rebinning_config["interpolation_kwargs"])
+
 
             rebinning_kwargs = dict(
                 method = rebinning_method,
@@ -209,6 +229,16 @@ def main():
                 }
                 prior_parameters_hm = list(prior_parameters_dict_hm.values())
             ncores = int(emcee_config["ncores"]) if "ncores" in list(emcee_config.keys()) else None
+            
+            use_sigma_sys = str2bool(model_config["use_sigma_sys"])
+            if use_sigma_sys == True:
+                prior_config_sys = dict(config["SIGMA_SYSTEMATIC"])
+                prior_parameters_sys = dict(prior_config_sys)
+                prior_parameters_dict_sys = {
+                    key: list(prop2arr(prior_parameters_sys[key], dtype=str))
+                    for key in list(prior_parameters_sys.keys())
+                }
+                prior_parameters_sys = list(prior_parameters_dict_sys.values())
             use_two_halo_term = str2bool(model_config["two_halo_term"])
             two_halo_kwargs = dict(config["TWO_HALO_TERM"]) if "TWO_HALO_TERM" in list(dict(config).keys()) else {}
             for k in list(two_halo_kwargs.keys()):
@@ -226,6 +256,7 @@ def main():
                     two_halo_kwargs[k] = eval(two_halo_kwargs[k])
             if "two_halo_power_func" in list(two_halo_kwargs.keys()):
                 two_halo_kwargs["two_halo_power_func"] = getattr(profiles_module, two_halo_kwargs["two_halo_power_func"])
+            
             two_halo_power = two_halo_kwargs["two_halo_power"]
 
             if two_halo_power == True:
@@ -281,7 +312,7 @@ def main():
             mis_centering_params = [0,0]
             n_mis_centering_params = len(prior_parameters_mc)
 
-        two_halo_kwargs["cosmo"] = ccl.CosmologyVanillaLCDM()
+        two_halo_kwargs["cosmo"] = cosmological_model
 
         plot_cov_matrix = args.plot_cov_matrix
         ncores = str(args.ncores) if ncores is None else ncores
@@ -334,6 +365,11 @@ def main():
         subr_grid = str2bool(model_config["subr_grid"]) if "subr_grid" in list(model_config.keys()) else False
         subr_grid_kwargs = dict(model_config["subr_grid_kwargs"]) if "subr_grid_kwargs" in list(model_config.keys()) else {}
 
+        shrinkcage = str2bool(model_config["shrinkcage"]) if "shrinkcage" in list(model_config.keys()) else False
+        alpha_shrinkcage = float(model_config["alpha_shrinkcage"]) if "alpha_shrinkcage" in list(model_config.keys()) else 0.1
+
+        regularize = str2bool(model_config["regularize"]) if "regularize" in list(model_config.keys()) else False
+        target_cond_number = float(model_config["target_cond_number"]) if "target_cond_number" in list(model_config.keys()) else 10
         if fit_entire_data == False:
 
             clusters = grouped_clusters.load_from_path(specific_path, dtype = float_dtype)
@@ -347,6 +383,17 @@ def main():
             profile = np.array(clusters.mean_profile, dtype = float_dtype)
             errors = np.array(clusters.error_in_mean, dtype = float_dtype)
             sigma = clusters.cov if hasattr(clusters, "cov") else errors
+            if hasattr(clusters, "background"):
+                profile = profile - clusters.background
+                errors = np.sqrt(errors**2 +clusters.background_std**2)
+                sigma = sigma + clusters.background_std**2*np.ones(np.shape(sigma))
+            if np.ndim(sigma) == 2 and shrinkcage == True and regularize == False:
+                sigma = alpha_shrinkcage * sigma + (1 - alpha)*np.diag(sigma)
+            if regularize == True and np.ndim(sigma) == 2:
+                eigenvalues, eigenvectors = np.linalg.eigh(sigma)
+                lambda1, lambdaN = np.sort(eigenvalues)[-1], np.sort(eigenvalues)[0]
+                delta = (lambda1 - lambdaN*target_cond_number)/(target_cond_number - 1)
+                sigma = sigma + delta*np.eye(len(sigma))
             rbins, zbins, Mbins = completeness_config.pop("rbins", 25), completeness_config.pop("zbins", 25), completeness_config.pop("Mbins", 25)
             rbins = int(rbins)
             zbins = int(zbins)
@@ -368,7 +415,9 @@ def main():
                                                     infere_mass = infere_mass, redshift_pivot = redshift_pivot,
                                                     richness_pivot = richness_pivot,
                                                     verbose = debug, subr_grid = subr_grid,
-                                                    subr_grid_kwargs = subr_grid_kwargs)
+                                                    subr_grid_kwargs = subr_grid_kwargs, 
+                                                    numba = numba, 
+                                                    cosmo = cosmological_model)
             
             prior_parameters = dict(prior_config)
             prior_parameters_dict = {
@@ -386,7 +435,9 @@ def main():
             if use_two_halo_term == True and two_halo_power:
                 prior_parameters += prior_parameters_2h
                 prior_parameters_dict = {**prior_parameters_dict, **prior_parameters_dict_2h}
-            
+            if use_sigma_sys == True:
+                prior_parameters += prior_parameters_sys
+                prior_parameters_dict = {**prior_parameters_dict, **prior_parameters_dict_sys}
                 
             params_labels = list(prior_parameters_dict.keys())
 
@@ -504,7 +555,7 @@ def main():
                     store_two_halo_term = kwargs["store_two_halo_term"]
                     infere_mass = kwargs["infere_mass"]
                     two_halo_power = kwargs["two_halo_power"]
-
+                    use_sigma_sys = kwargs["use_sigma_sys"]
                     model_kwargs = {}
                     if len(fixed_params) > 1 and in_demo_mode == False:
                         free_params_indx = [p[0] for p in free_params]
@@ -515,6 +566,11 @@ def main():
                         new_theta[free_params_indx] = theta
                         theta = new_theta
 
+                    if use_sigma_sys == True:
+                        sigma_sys = theta[-1]
+                        theta = theta[:-1]
+                    else:
+                        sigma_sys == 0
                     if two_halo_power == True:
                         n_two_halo_power = kwargs["n_two_halo_params"]
                         two_halo_power = theta[-n_two_halo_power:]
@@ -543,7 +599,8 @@ def main():
                     elif store_two_halo_term == False and infere_mass == True:
                         mu, mass = mu
                     if "inv_cov_matrix" not in list(kwargs.keys()):
-                        res = np.sum(((y - mu) / sigma)**2)
+                        sigma = np.sqrt(sigma**2 + sigma_sys**2)
+                        res = np.sum(((y - mu) / (sigma))**2)
                         if store_two_halo_term == False:
                             if infere_mass == True:
                                 return -0.5 * res, res, mu, mass
@@ -554,7 +611,7 @@ def main():
                                 return -0.5 * res, res, mu, one_halo, two_halo, mass
                         return -0.5 * res, res, mu
                     else:
-                        inv_cov_matrix = kwargs["inv_cov_matrix"]
+                        inv_cov_matrix = kwargs["inv_cov_matrix"] + sigma_sys**2*np.eye(len(y))
                         log_det_C = kwargs["log_det_C"]
                         residual = y - mu
                         current_chi2 = np.dot(residual.T, np.dot(inv_cov_matrix, residual))
@@ -569,8 +626,7 @@ def main():
                                 return ln_lk, current_chi2, mu, one_halo, two_halo, mass
                             return ln_lk, current_chi2, mu, one_halo, two_halo
                 #======
-            
-            fixed_params = [(i,p[1]) for i,p in enumerate(prior_parameters) if "fixed" in p]
+            fixed_params = [(i,p[2]) for i,p in enumerate(prior_parameters) if "fixed" in p]
             free_params = [(i,p) for i,p in enumerate(prior_parameters) if "free" in p]
             param_limits = [
                 np.array(prior_parameters[i][-1].split("|")).astype(float_dtype)[-2::]
@@ -639,6 +695,10 @@ def main():
             ic(fixed_params)
             ic(free_params)
 
+            if use_sigma_sys == True:
+                sampler_kwargs["use_sigma_sys"] = True
+            else:
+                sampler_kwargs["use_sigma_sys"] = False
             if use_two_halo_term == True and two_halo_power == True:
                 sampler_kwargs["two_halo_power"] = two_halo_power
                 sampler_kwargs["n_two_halo_params"] = n_parameters_2h
@@ -758,7 +818,6 @@ def main():
                 blobs_dtype = dtype
             )  
             if rewrite == True:
-                print("rewriting backend")
                 backend.reset(nwalkers, ndims)
             elif rewrite == False and os.path.exists(filename):
                 try:
@@ -777,7 +836,7 @@ def main():
                             for i in range(nwalkers)
                             ],
                         dtype = float_dtype)
-                    print("Chain can't open the last sample. return the exception: \n",e)
+                    print("Chain can't open the last sample. It returned the exception: \n",e)
 
             print("\033[44m",10*"=","RUNNING MCMC",10*"=" ,"\033[0m")
             print(f"* richness: \033[32m[{int(rmin)},{int(rmax)}]\033[0m")
@@ -833,8 +892,8 @@ def main():
                                                 two_halo_kwargs = two_halo_kwargs, use_mis_centering = use_mis_centering, fixed_RM_relationship = fixed_halo_model
                                                 , background = background, delta = delta, eval_mass = eval_mass, apply_filter_per_profile = apply_filter_per_profile
                                                 ,rebinning = use_rebinning, rebinning_kwargs = rebinning_kwargs, return_1h2h = store_two_halo_term,
-                                                infere_mass = infere_mass, verbose = debug, subr_grid = subr_grid, subr_grid_kwargs = subr_grid_kwargs,
-                                                mis_centering_kwargs = mis_centering_kwargs)
+                                                infere_mass = infere_mass, verbose = True, subr_grid = subr_grid, subr_grid_kwargs = subr_grid_kwargs,
+                                                mis_centering_kwargs = mis_centering_kwargs, numba = numba, cosmo = cosmological_model)
 
             R = clusters[-1].R
             profiles = np.zeros(len(clusters)*len(R), dtype = np.float32)
@@ -843,9 +902,19 @@ def main():
             bins = bins[sorted_idx]
             clusters = [clusters[i] for i in sorted_idx]
             for i in range(len(clusters)):
-                profiles[i*len(R) : (i+1)*len(R)] = clusters[i].mean_profile
+                profiles[i*len(R) : (i+1)*len(R)] = clusters[i].mean_profile - clusters[i].background if hasattr(clusters[i], "background") else clusters[i].mean_profile
             cluster, cov = grouped_clusters.compute_joint_cov(off_diag = off_diag, groups = clusters, corr = False)
-            
+            if shrinkcage == True and np.ndim(cov) == 2:
+                cov = alpha_shrinkcage*cov + (1 - alpha_shrinkcage)*np.diag(np.diag(cov))
+            if np.ndim(cov) == 2 and shrinkcage == False and regularize == True:
+                eigenvalues, eigenvectors = np.linalg.eigh(cov)
+                lambda1, lambdaN = np.sort(eigenvalues)[-1], np.sort(eigenvalues)[0]
+                delta = (lambda1 - lambdaN*target_cond_number)/(target_cond_number - 1)
+                cov = cov + delta*np.eye(len(cov))
+            fig, ax = plt.subplots(figsize = (14, 14))
+            im = ax.imshow(np.abs(cov), cmap = "coolwarm", norm = LogNorm(vmin = 1e-16, vmax = 1e-13), origin = "lower")
+            plt.colorbar(im)
+            fig.savefig(f"{specific_path}/general_cov.png")
             individuals_covs = [g.cov for g in clusters]
             np.save(f"{specific_path}/individuals_covs.npy", np.array(individuals_covs))
             from plottery.plotutils import update_rcParams
@@ -900,12 +969,13 @@ def main():
             if use_two_halo_term == True and two_halo_power:
                 prior_parameters += prior_parameters_2h
                 prior_parameters_dict = {**prior_parameters_dict, **prior_parameters_dict_2h}
-            
+            if use_sigma_sys == True:
+                prior_parameters += prior_parameters_sys
+                prior_parameters_dict = {**prior_parameters_dict, **prior_parameters_dict_sys}
+
             params_labels = list(prior_parameters_dict.keys())
-
-            fixed_params = [(i,p[1]) for i,p in enumerate(prior_parameters) if "fixed" in p]
+            fixed_params = [(i,p[2]) for i,p in enumerate(prior_parameters) if "fixed" in p]
             free_params = [(i,p) for i,p in enumerate(prior_parameters) if "free" in p]
-
             
             param_limits = [
                 np.array(prior_parameters[i][2].split("|")).astype(float_dtype)[-2::]
@@ -925,7 +995,6 @@ def main():
                 for i in range(len(prior_parameters))
             ]
             ndims = len(free_params)
-
             initial_guess = np.zeros((nwalkers, len(prior_parameters)))
 
             for i in range(len(param_limits)):
@@ -960,26 +1029,32 @@ def main():
                     model = kwargs["model"]
                     in_demo_mode = kwargs["in_demo_mode"] if "in_demo_mode" in list(kwargs.keys()) else False
                     free_params = kwargs["free_params"]
-                    fixed_params = kwargs["fixed_params"]
+                    fixed_params = kwargs["fixed_params"]  
                     fixed_mis_centering = kwargs["fixed_mis_centering"]
                     fixed_halo_model = kwargs["fixed_halo_model"]
                     store_two_halo_term = kwargs["store_two_halo_term"]
                     infere_mass = kwargs["infere_mass"]
                     two_halo_power = kwargs["two_halo_power"]
-                    bins = kwargs["bins"] if y.ndim == 1 else np.array(y)[:,0:4]
-                    y = np.array(y)[:,4:].flatten() if y.ndim > 1 else y
+                    bins = kwargs["bins"] if y.ndim == 1 else y[:,0:4]
+                    y = y[:,4:].flatten() if y.ndim > 1 else y
                     ic(bins)
                     ic("initial theta", theta)
                     model_kwargs = {"cbin": bins}
-                    if len(fixed_params) > 1 and in_demo_mode == False:
+                    use_sigma_sys = kwargs["use_sigma_sys"]
+                    if len(fixed_params) > 0 and in_demo_mode == False:
                         free_params_indx = [p[0] for p in free_params]
                         fixed_params_indx = [p[0] for p in fixed_params]
-                        fixed_params_values = [p[0] for p in fixed_params]
+                        fixed_params_values = [p[1] for p in fixed_params]
                         new_theta = np.empty(len(fixed_params) + len(free_params))
                         new_theta[fixed_params_indx] = fixed_params_values
                         new_theta[free_params_indx] = theta
                         theta = new_theta
                         ic("theta with fixed parameters", theta)
+                    if use_sigma_sys == True:
+                        sigma_sys = theta[-1]
+                        theta = theta[:-1]
+                    else:
+                        sigma_sys = 0.0
                     if two_halo_power == True:
                         n_two_halo_power = kwargs["n_two_halo_params"]
                         two_halo_power = theta[-n_two_halo_power:]
@@ -1012,7 +1087,8 @@ def main():
                         mu, one_halo, two_halo = mu
                     elif store_two_halo_term == False and infere_mass == True:
                         mu, mass = mu
-                    if "inv_cov_matrix" not in list(kwargs.keys()):
+                    if "inv_cov_matrix" not in kwargs:
+                        sigma = np.sqrt(sigma**2 + sigma_sys**2)
                         log_likelihood = -0.5 * np.log(2 * np.pi * sigma**2) - 0.5 * (
                             (y - mu) ** 2
                         ) / (sigma**2)
@@ -1025,7 +1101,7 @@ def main():
                             return np.sum(log_likelihood), current_chi2, mu, mass
                         return np.sum(log_likelihood), current_chi2, mu
                     else:
-                        inv_cov_matrix = kwargs["inv_cov_matrix"]
+                        inv_cov_matrix = kwargs["inv_cov_matrix"] + sigma_sys**2*np.eye(len(y))
                         log_det_C = kwargs["log_det_C"]
                         residual = y - mu
                         current_chi2 = np.dot(residual.T, np.dot(inv_cov_matrix, residual))
@@ -1040,7 +1116,9 @@ def main():
             elif likelihood_func == "chi2":
                 def ln_likelihood_general(theta, x, y, sigma, **kwargs):
                     model = kwargs["model"]
-                    in_demo_mode = kwargs["in_demo_mode"] if "in_demo_mode" in list(kwargs.keys()) else False
+
+                    in_demo_mode = kwargs.get("in_demo_mode", False)
+                    
                     free_params = kwargs["free_params"]
                     fixed_params = kwargs["fixed_params"]
                     store_two_halo_term = kwargs["store_two_halo_term"]
@@ -1049,7 +1127,8 @@ def main():
                     bins = kwargs["bins"]
 
                     model_kwargs = {"cbin": bins}
-                    if len(fixed_params) > 1 and in_demo_mode == False:
+                    use_sigma_sys = kwargs["use_sigma_sys"]
+                    if len(fixed_params) > 0 and in_demo_mode == False:
                         free_params_indx = [p[0] for p in free_params]
                         fixed_params_indx = [p[0] for p in fixed_params]
                         fixed_params_values = [p[0] for p in fixed_params]
@@ -1057,6 +1136,11 @@ def main():
                         new_theta[fixed_params_indx] = fixed_params_values
                         new_theta[free_params_indx] = theta
                         theta = new_theta
+                    if use_sigma_sys == True:
+                        sigma_sys = theta[-1]
+                        theta = theta[:-1]
+                    else:
+                        sigma_sys = 0
                     if two_halo_power == True:
                         n_two_halo_power = kwargs["n_two_halo_params"]
                         two_halo_power = theta[-n_two_halo_power:]
@@ -1083,7 +1167,8 @@ def main():
                         mu, one_halo, two_halo = mu
                     elif store_two_halo_term == False and infere_mass == True:
                         mu, mass = mu
-                    if "inv_cov_matrix" not in list(kwargs.keys()):
+                    if "inv_cov_matrix" not in kwargs:
+                        sigma = np.sqrt(sigma**2 + sigma_sys**2)
                         log_likelihood = -0.5 * np.log(2 * np.pi * sigma**2) - 0.5 * (
                             (y - mu) ** 2
                         ) / (sigma**2)
@@ -1096,7 +1181,7 @@ def main():
                             return np.sum(log_likelihood), current_chi2, mu, mass
                         return np.sum(log_likelihood), current_chi2, mu
                     else:
-                        inv_cov_matrix = kwargs["inv_cov_matrix"]
+                        inv_cov_matrix = kwargs["inv_cov_matrix"] + sigma_sys**2*np.eye(len(y))
                         log_det_C = kwargs["log_det_C"]
                         residual = y - mu
                         current_chi2 = np.dot(residual.T, np.dot(inv_cov_matrix, residual))
@@ -1132,6 +1217,10 @@ def main():
             sampler_kwargs["fixed_params"] = fixed_params
             sampler_kwargs["free_params"] = free_params
 
+            if use_sigma_sys == True:
+                sampler_kwargs["use_sigma_sys"] = True
+            else:
+                sampler_kwargs["use_sigma_sys"] = False
             if use_two_halo_term == True and two_halo_power == True:
                 sampler_kwargs["two_halo_power"] = two_halo_power
                 sampler_kwargs["n_two_halo_params"] = n_parameters_2h
@@ -1494,8 +1583,7 @@ def main():
                 prior_parameters += prior_parameters_2h
                 prior_parameters_dict = {**prior_parameters_dict, **prior_parameters_dict_2h}
             
-            params_labels = list(prior_parameters_dict.keys())
-
+            params_labels = list(prior_parameters_dict.keys()) 
             fixed_params = [(i,p[1]) for i,p in enumerate(prior_parameters) if "fixed" in p]
             free_params = [(i,p) for i,p in enumerate(prior_parameters) if "free" in p]
 
@@ -1611,7 +1699,8 @@ def main():
                                                 two_halo_kwargs = two_halo_kwargs, use_mis_centering = use_mis_centering, fixed_RM_relationship = fixed_halo_model
                                                 , background = background, delta = delta, eval_mass = eval_mass, apply_filter_per_profile = apply_filter_per_profile
                                                 ,rebinning = use_rebinning, rebinning_kwargs = rebinning_kwargs, return_1h2h = store_two_halo_term,
-                                                infere_mass = infere_mass, verbose = debug, subr_grid = subr_grid, subr_grid_kwargs = subr_grid_kwargs,)
+                                                infere_mass = infere_mass, verbose = True, subr_grid = subr_grid, subr_grid_kwargs = subr_grid_kwargs,
+                                                numba = numba)
 
             R = clusters[-1].R
             profiles = np.zeros(len(clusters)*len(R), dtype = np.float32)
@@ -1622,9 +1711,8 @@ def main():
 
             jbins.append(bins)
             jclusters = jclusters + clusters
-
             for i in range(len(clusters)):
-                profiles[i*len(R) : (i+1)*len(R)] = clusters[i].mean_profile
+                profiles[i*len(R) : (i+1)*len(R)] = clusters[i].mean_profile - clusters[i].background if hasattr(clusters[i], "background") else clusters[i].mean_profile
             jclusters_list.append(clusters)
             jfuncs.append(func)
             jprofiles.append(profiles)
@@ -2217,6 +2305,7 @@ def run_demo_mode_general(
     run_specific_demo = input("Run an specific demo? (y/n):")
     if run_specific_demo.lower() in ["", "y", "yes"]:
         params = np.array(input("Enter the desired parameters (separated by coma): ").split(","), dtype = float)
+        
         res = ln_likelihood_general(params, R, profiles, None, **sampler_kwargs)
         ln_lk = res[0]
         chi2 = res[1]

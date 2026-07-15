@@ -42,8 +42,444 @@ import shutil
 import sys
 from multiprocessing import Manager, pool
 from astropy.cosmology import Planck18 as planck18
-from numba import njit
+from numba import njit, prange
 from typing import Optional, Tuple
+
+
+from mpmath import fp as mpm
+from scipy.special import j0, j1, jn_zeros, jn, yv, jv
+
+class HankelSphericalTransform():
+    def __init__(self, N=1000, h=0.001):
+        nu = 0.5
+        zeros = np.arange(N) + 1
+        t = zeros * h
+        y = np.sinh(t)
+        psi = t * np.tanh(np.pi * y / 2)
+        a = (np.pi * t * np.cosh(t) + np.sinh(np.pi * np.sinh(t))) / (
+            1. + np.cosh(np.pi * np.sinh(t))
+        )
+        a[np.isnan(a)] = 1.
+        weights = yv(nu, np.pi * zeros) / jv(nu + 1, np.pi * zeros)
+        x = np.pi * psi / h
+        j = jv(nu, x)
+
+        self.x = x
+        self.c = np.pi * weights * j * a * np.sqrt(np.pi / (2.0 * x)) * x ** 2
+
+    def transform(self, lnx, lny, y2, X, direction="inverse"):
+
+        result = _hankel_transform_core(self.x, self.c, lnx, lny, y2, np.asarray(X, dtype=np.float64))
+        if direction == "inverse":
+            return result / (2.0 * np.pi ** 2)
+        elif direction == "forward":
+            return result * 4.0 * np.pi
+
+
+@njit(fastmath=True, cache=True, parallel=True)
+def _hankel_transform_core(x, c, lnx, lny, y2, X):
+    n_out = len(X)
+    n_nodes = len(x)
+    result = np.zeros(n_out)
+
+    for i in prange(n_out):
+        Xi = X[i]
+        s = 0.0
+        for m in range(n_nodes):
+            r_eval = x[m] / Xi
+            ln_f_val = _cubic_spline_eval_scalar(lnx, lny, y2, np.log(r_eval))
+            s += c[m] * np.exp(ln_f_val)
+        result[i] = s / Xi ** 3
+
+    return result
+
+def hankel_transform(h, lnx, lny, y2, X, direction="inverse"):
+    dir_flag = 0 if direction == "inverse" else 1
+    return _hankel_transform_core(h.x, h.j, h.w, h.a, lnx, lny, y2, X, dir_flag)
+
+z2dA_dA_table = np.array( [   4.42540724,   48.08520204,   90.68590179,  132.25722072,
+            172.82779316,  212.42522463,  251.07614002,  288.80622893,
+            325.64028848,  361.6022637 ,  396.71528571,  431.00170768,
+            464.48313896,  497.18047724,  529.11393902,  560.30308852,
+            590.76686493,  620.52360835,  649.5910843 ,  677.98650705,
+            705.72656169,  732.82742512,  759.30478596,  785.17386355,
+            810.44942591,  835.14580688,  859.27692247,  882.85628636,
+            905.89702471,  928.41189027,  950.41327582,  971.91322702,
+            992.92345463, 1013.45534626, 1033.51997749, 1053.12812261,
+           1072.29026478, 1091.01660586, 1109.31707574, 1127.20134129,
+           1144.67881498, 1161.75866306, 1178.44981351, 1194.76096356,
+           1210.70058695, 1226.27694096, 1241.49807306, 1256.37182735,
+           1270.90585078, 1285.10759906, 1298.98434243, 1312.54317113,
+           1325.79100074, 1338.73457726, 1351.38048207, 1363.73513664,
+           1375.80480714, 1387.59560883, 1399.11351035, 1410.3643378 ,
+           1421.35377874, 1432.087386  , 1442.57058141, 1452.80865937,
+           1462.80679033, 1472.57002411, 1482.10329315, 1491.41141569,
+           1500.49909872, 1509.370941  , 1518.03143588, 1526.48497402,
+           1534.73584611, 1542.78824544, 1550.64627042, 1558.31392698,
+           1565.79513099, 1573.09371049, 1580.21340795, 1587.1578824 ,
+           1593.93071156, 1600.53539383, 1606.97535029, 1613.25392662,
+           1619.37439493, 1625.3399556 , 1631.15373905, 1636.81880739,
+           1642.33815616, 1647.71471586, 1652.95135359, 1658.05087456,
+           1663.01602354, 1667.84948635, 1672.55389125, 1677.13181029,
+           1681.58576066, 1685.918206  , 1690.13155763, 1694.2281758 ,
+           1698.21037088, 1702.08040451, 1705.84049076, 1709.49279722,
+           1713.03944609, 1716.48251519, 1719.82403903, 1723.06600977,
+           1726.21037822, 1729.25905476, 1732.21391025, 1735.07677699,
+           1737.8494495 , 1740.53368547, 1743.13120653, 1745.64369908,
+           1748.07281508, 1750.42017283, 1752.6873577 , 1754.87592289,
+           1756.98739015, 1759.02325042, 1760.98496459, 1762.87396412,
+           1764.6916517 , 1766.43940187, 1768.11856166, 1769.73045118,
+           1771.27636421, 1772.75756876, 1774.17530766, 1775.53079908,
+           1776.82523709, 1778.05979216, 1779.23561166, 1780.35382039,
+           1781.41552104, 1782.42179469, 1783.37370122, 1784.27227983,
+           1785.11854944, 1785.9135091 , 1786.65813848, 1787.35339822,
+           1788.00023036, 1788.59955872, 1789.1522893 , 1789.65931062,
+           1790.12149414, 1790.53969456, 1790.91475022, 1791.2474834 ,
+           1791.53870069, 1791.78919328, 1791.9997373 , 1792.17109414,
+           1792.30401074, 1792.39921987, 1792.45744048, 1792.4793779 ,
+           1792.4657242 , 1792.41715841, 1792.33434681, 1792.21794317,
+           1792.06858902, 1791.88691389, 1791.67353557, 1791.42906032,
+           1791.15408312, 1790.84918789, 1790.51494774, 1790.15192512,
+           1789.76067212, 1789.3417306 , 1788.89563244, 1788.42289973,
+           1787.92404496, 1787.39957121, 1786.84997232, 1786.27573312,
+           1785.67732955, 1785.05522888, 1784.40988987, 1783.7417629 ,
+           1783.05129019, 1782.33890593, 1781.60503643, 1780.85010029,
+           1780.07450854, 1779.27866481, 1778.46296542, 1777.62779959,
+           1776.77354951, 1775.90059054, 1775.00929127, 1774.10001374,
+           1773.17311347, 1772.22893964, 1771.26783523, 1770.29013706,
+           1769.296176  , 1768.28627701, 1767.2607593 , 1766.2199364 ,
+           1765.1641163 , 1764.09360155, 1763.00868934, 1761.90967162,
+           1760.7968352 , 1759.67046182, 1758.53082828, 1757.37820651,
+           1756.21286369, 1755.03506228, 1753.84506017, 1752.64311072,
+           1751.42946288, 1750.20436124, 1748.96804614, 1747.72075371,
+           1746.46271599, 1745.19416098, 1743.9153127 , 1742.62639132,
+           1741.32761316, 1740.01919079, 1738.70133314, 1737.37424549,
+           1736.03812958, 1734.69318367, 1733.33960261, 1731.97757788,
+           1730.60729767, 1729.22894693, 1727.84270743, 1726.44875781,
+           1725.04727366, 1723.63842754, 1722.22238906, 1720.79932494,
+           1719.36939901, 1717.93277234, 1716.48960321, 1715.04004723,
+           1713.58425732, 1712.12238381, 1710.65457447, 1709.18097455,
+           1707.70172681, 1706.21697159, 1704.72684686, 1703.23148822,
+           1701.73102896, 1700.22560014, 1698.71533057, 1697.20034687,
+           1695.68077352, 1694.15673289, 1692.62834528, 1691.09572894,
+           1689.55900013, 1688.01827312, 1686.47366027, 1684.92527202,
+           1683.37321696, 1681.81760182, 1680.25853155, 1678.69610931,
+           1677.13043651, 1675.56161287, 1673.98973641, 1672.41490348,
+           1670.83720883, 1669.25674559, 1667.67360532, 1666.08787805,
+           1664.49965226, 1662.90901497, 1661.31605169, 1659.72084653,
+           1658.12348214, 1656.5240398 , 1654.9225994 , 1653.31923949,
+           1651.71403729, 1650.10706872, 1648.49840841, 1646.88812972,
+           1645.27630479, 1643.66300452, 1642.04829862, 1640.43225561,
+           1638.81494287, 1637.19642662, 1635.57677196, 1633.95604289,
+           1632.33430232, 1630.71161211, 1629.08803304, 1627.46362488])
+
+z2dA_z_table = np.array([1.000e-03, 1.100e-02, 2.100e-02, 3.100e-02, 4.100e-02, 5.100e-02,
+       6.100e-02, 7.100e-02, 8.100e-02, 9.100e-02, 1.010e-01, 1.110e-01,
+       1.210e-01, 1.310e-01, 1.410e-01, 1.510e-01, 1.610e-01, 1.710e-01,
+       1.810e-01, 1.910e-01, 2.010e-01, 2.110e-01, 2.210e-01, 2.310e-01,
+       2.410e-01, 2.510e-01, 2.610e-01, 2.710e-01, 2.810e-01, 2.910e-01,
+       3.010e-01, 3.110e-01, 3.210e-01, 3.310e-01, 3.410e-01, 3.510e-01,
+       3.610e-01, 3.710e-01, 3.810e-01, 3.910e-01, 4.010e-01, 4.110e-01,
+       4.210e-01, 4.310e-01, 4.410e-01, 4.510e-01, 4.610e-01, 4.710e-01,
+       4.810e-01, 4.910e-01, 5.010e-01, 5.110e-01, 5.210e-01, 5.310e-01,
+       5.410e-01, 5.510e-01, 5.610e-01, 5.710e-01, 5.810e-01, 5.910e-01,
+       6.010e-01, 6.110e-01, 6.210e-01, 6.310e-01, 6.410e-01, 6.510e-01,
+       6.610e-01, 6.710e-01, 6.810e-01, 6.910e-01, 7.010e-01, 7.110e-01,
+       7.210e-01, 7.310e-01, 7.410e-01, 7.510e-01, 7.610e-01, 7.710e-01,
+       7.810e-01, 7.910e-01, 8.010e-01, 8.110e-01, 8.210e-01, 8.310e-01,
+       8.410e-01, 8.510e-01, 8.610e-01, 8.710e-01, 8.810e-01, 8.910e-01,
+       9.010e-01, 9.110e-01, 9.210e-01, 9.310e-01, 9.410e-01, 9.510e-01,
+       9.610e-01, 9.710e-01, 9.810e-01, 9.910e-01, 1.001e+00, 1.011e+00,
+       1.021e+00, 1.031e+00, 1.041e+00, 1.051e+00, 1.061e+00, 1.071e+00,
+       1.081e+00, 1.091e+00, 1.101e+00, 1.111e+00, 1.121e+00, 1.131e+00,
+       1.141e+00, 1.151e+00, 1.161e+00, 1.171e+00, 1.181e+00, 1.191e+00,
+       1.201e+00, 1.211e+00, 1.221e+00, 1.231e+00, 1.241e+00, 1.251e+00,
+       1.261e+00, 1.271e+00, 1.281e+00, 1.291e+00, 1.301e+00, 1.311e+00,
+       1.321e+00, 1.331e+00, 1.341e+00, 1.351e+00, 1.361e+00, 1.371e+00,
+       1.381e+00, 1.391e+00, 1.401e+00, 1.411e+00, 1.421e+00, 1.431e+00,
+       1.441e+00, 1.451e+00, 1.461e+00, 1.471e+00, 1.481e+00, 1.491e+00,
+       1.501e+00, 1.511e+00, 1.521e+00, 1.531e+00, 1.541e+00, 1.551e+00,
+       1.561e+00, 1.571e+00, 1.581e+00, 1.591e+00, 1.601e+00, 1.611e+00,
+       1.621e+00, 1.631e+00, 1.641e+00, 1.651e+00, 1.661e+00, 1.671e+00,
+       1.681e+00, 1.691e+00, 1.701e+00, 1.711e+00, 1.721e+00, 1.731e+00,
+       1.741e+00, 1.751e+00, 1.761e+00, 1.771e+00, 1.781e+00, 1.791e+00,
+       1.801e+00, 1.811e+00, 1.821e+00, 1.831e+00, 1.841e+00, 1.851e+00,
+       1.861e+00, 1.871e+00, 1.881e+00, 1.891e+00, 1.901e+00, 1.911e+00,
+       1.921e+00, 1.931e+00, 1.941e+00, 1.951e+00, 1.961e+00, 1.971e+00,
+       1.981e+00, 1.991e+00, 2.001e+00, 2.011e+00, 2.021e+00, 2.031e+00,
+       2.041e+00, 2.051e+00, 2.061e+00, 2.071e+00, 2.081e+00, 2.091e+00,
+       2.101e+00, 2.111e+00, 2.121e+00, 2.131e+00, 2.141e+00, 2.151e+00,
+       2.161e+00, 2.171e+00, 2.181e+00, 2.191e+00, 2.201e+00, 2.211e+00,
+       2.221e+00, 2.231e+00, 2.241e+00, 2.251e+00, 2.261e+00, 2.271e+00,
+       2.281e+00, 2.291e+00, 2.301e+00, 2.311e+00, 2.321e+00, 2.331e+00,
+       2.341e+00, 2.351e+00, 2.361e+00, 2.371e+00, 2.381e+00, 2.391e+00,
+       2.401e+00, 2.411e+00, 2.421e+00, 2.431e+00, 2.441e+00, 2.451e+00,
+       2.461e+00, 2.471e+00, 2.481e+00, 2.491e+00, 2.501e+00, 2.511e+00,
+       2.521e+00, 2.531e+00, 2.541e+00, 2.551e+00, 2.561e+00, 2.571e+00,
+       2.581e+00, 2.591e+00, 2.601e+00, 2.611e+00, 2.621e+00, 2.631e+00,
+       2.641e+00, 2.651e+00, 2.661e+00, 2.671e+00, 2.681e+00, 2.691e+00,
+       2.701e+00, 2.711e+00, 2.721e+00, 2.731e+00, 2.741e+00, 2.751e+00,
+       2.761e+00, 2.771e+00, 2.781e+00, 2.791e+00, 2.801e+00, 2.811e+00,
+       2.821e+00, 2.831e+00, 2.841e+00, 2.851e+00, 2.861e+00, 2.871e+00,
+       2.881e+00, 2.891e+00, 2.901e+00, 2.911e+00, 2.921e+00, 2.931e+00,
+       2.941e+00, 2.951e+00, 2.961e+00, 2.971e+00, 2.981e+00, 2.991e+00])
+
+@njit(fastmath = True, cache = True)
+def z2dA(z):
+    z_interp = np.interp(z, z2dA_z_table, z2dA_dA_table)
+    return z_interp
+
+@njit(fastmath = True, cache = True)
+def trapz_1d(y, x):
+    result = 0.0
+    for i in range(len(x) - 1):
+        result += 0.5 * (y[i] + y[i + 1]) * (x[i + 1] - x[i])
+    return result
+
+
+@njit(fastmath = True, cache = True)
+def trapz_axis0(y, x):
+    n = y.shape[0]
+    result = np.zeros(y.shape[1:], dtype=y.dtype)
+    for i in range(n - 1):
+        dx = x[i + 1] - x[i]
+        result += 0.5 * (y[i] + y[i + 1]) * dx
+    return result
+
+
+@njit(fastmath=True, cache = True)
+def trapz_axis1(y, x):
+
+    n = y.shape[1]
+    result = np.zeros((y.shape[0],) + y.shape[2:], dtype=y.dtype)
+
+    for i in range(n-1):
+        dx = x[i+1] - x[i]
+        result += (y[:,i,...] + y[:,i+1,...]) * (0.5*dx)
+
+    return result
+
+
+@njit(fastmath = True, cache = True)
+def trapz_axis2(y, x):
+    n = y.shape[2]
+    result = np.zeros(y.shape[:2] + y.shape[3:], dtype=y.dtype)
+    for i in range(n - 1):
+        dx = x[i + 1] - x[i]
+        result += 0.5 * (y[:, :, i, ...] + y[:, :, i + 1, ...]) * dx
+    return result
+
+@njit(fastmath=True, cache = True)
+def miscenter_core(P, R_Mpc_mis, xmis, theta, Roff, weights_mc, fmis):
+
+    Nr, Nm, Nz = P.shape
+    Ntheta = theta.shape[0]
+    NRoff = Roff.shape[0]
+
+    off = np.zeros((Nz, Nm, NRoff, Nr))
+    woff = np.zeros((Nz, Nm, Nr))
+
+    norm = trapz_1d(weights_mc, Roff)
+
+    for i in prange(Nz):
+        for j in range(Nm):
+
+            x = R_Mpc_mis[:, i, j]
+            y = P[:, j, i]
+
+            vals = np.empty(Ntheta)
+            tmp = np.empty(NRoff)
+
+            for r in range(Nr):
+                for k in range(NRoff):
+
+                    for t in range(Ntheta):
+                        vals[t] = interp_fast(
+                            xmis[t, k, r, i, j],
+                            x,
+                            y
+                        )
+
+                    off[i, j, k, r] = trapz_axis0(vals, theta)
+
+            for r in range(Nr):
+
+                for k in range(NRoff):
+                    tmp[k] = weights_mc[k] * off[i, j, k, r]
+
+                woff[i, j, r] = trapz_axis0(tmp, Roff) / norm
+
+    P_new = (1 - fmis) * P + fmis * np.transpose(woff, (2, 1, 0)) / (2*np.pi)
+
+    return P_new
+
+import numpy as np
+from numba import njit
+
+@njit(fastmath=True, cache=True)
+def cubic_spline_prepare(x, y):
+    n = len(x)
+    y2 = np.zeros(n)
+    u = np.zeros(n)
+    y2[0] = 0.0
+    u[0] = 0.0
+    for i in range(1, n - 1):
+        sig = (x[i] - x[i - 1]) / (x[i + 1] - x[i - 1])
+        p = sig * y2[i - 1] + 2.0
+        y2[i] = (sig - 1.0) / p
+        dy_r = (y[i + 1] - y[i]) / (x[i + 1] - x[i])
+        dy_l = (y[i] - y[i - 1]) / (x[i] - x[i - 1])
+        u[i] = (6.0 * (dy_r - dy_l) / (x[i + 1] - x[i - 1]) - sig * u[i - 1]) / p
+    qn = 0.0
+    un = 0.0
+
+    y2[n - 1] = (un - qn * u[n - 2]) / (qn * y2[n - 2] + 1.0)
+    for k in range(n - 2, -1, -1):
+        y2[k] = y2[k] * y2[k + 1] + u[k]
+
+    return y2
+
+
+@njit(fastmath=True, cache=True)
+def _cubic_spline_eval_scalar(x, y, y2, xi):
+    n = len(x)
+    if xi < x[0]:
+        h = x[1] - x[0]
+        deriv0 = (y[1] - y[0]) / h - h * (2.0 * y2[0] + y2[1]) / 6.0
+        return y[0] + deriv0 * (xi - x[0])
+
+    if xi > x[n - 1]:
+        h = x[n - 1] - x[n - 2]
+        deriv_n = (y[n - 1] - y[n - 2]) / h + h * (y2[n - 2] + 2.0 * y2[n - 1]) / 6.0
+        return y[n - 1] + deriv_n * (xi - x[n - 1])
+    klo = 0
+    khi = n - 1
+    while khi - klo > 1:
+        k = (khi + klo) >> 1
+        if x[k] > xi:
+            khi = k
+        else:
+            klo = k
+
+    h = x[khi] - x[klo]
+    a = (x[khi] - xi) / h
+    b = (xi - x[klo]) / h
+
+    return (a * y[klo] + b * y[khi] +
+            ((a**3 - a) * y2[klo] + (b**3 - b) * y2[khi]) * (h * h) / 6.0)
+
+
+@njit(fastmath=True, cache=True)
+def cubic_spline_eval(x, y, y2, xi_array):
+    m = len(xi_array)
+    out = np.zeros(m)
+    for i in range(m):
+        out[i] = _cubic_spline_eval_scalar(x, y, y2, xi_array[i])
+    return out
+
+@njit(fastmath=True, cache=True)
+def loglog_spline_prepare(x, y):
+    lnx = np.log(x)
+    lny = np.log(y)
+    y2 = cubic_spline_prepare(lnx, lny)
+    return lnx, lny, y2
+
+
+@njit(fastmath=True, cache=True)
+def loglog_spline_eval(lnx, lny, y2, xi_array, is_log = False):
+    m = len(xi_array)
+    out = np.zeros(m)
+    for i in range(m):
+        ln_xi = np.log(xi_array[i]) if is_log == False else xi_array[i]
+        out[i] = _cubic_spline_eval_scalar(lnx, lny, y2, ln_xi)
+    return out
+
+@njit(fastmath=True, inline="always")
+def interp_fast(x0, x, y):
+
+    n = x.shape[0]
+
+    if x0 <= x[0]:
+        return y[0]
+    if x0 >= x[n-1]:
+        return y[n-1]
+
+    lo = 0
+    hi = n-1
+
+    while hi - lo > 1:
+        mid = (hi + lo) // 2
+        if x[mid] > x0:
+            hi = mid
+        else:
+            lo = mid
+
+    t = (x0 - x[lo]) / (x[hi] - x[lo])
+    return y[lo] + t * (y[hi] - y[lo])
+
+@njit(fastmath=True)
+def compute_xmis(Roff, R_Mpc_mis, theta):
+
+    nRoff = Roff.shape[0]
+    ntheta = theta.shape[0]
+    nR = R_Mpc_mis.shape[0]
+    nM = R_Mpc_mis.shape[1]
+    nz = R_Mpc_mis.shape[2]
+
+    xmis = np.empty((ntheta, nRoff, nR, nM, nz))
+
+    for t in prange(ntheta):
+        ct = np.cos(theta[t])
+
+        for o in range(nRoff):
+            ro = Roff[o]
+
+            for r in range(nR):
+                for m in range(nM):
+                    for z in range(nz):
+
+                        Rv = R_Mpc_mis[r,m,z]
+
+                        xmis[t,o,r,m,z] = np.sqrt(
+                            ro*ro +
+                            Rv*Rv +
+                            2*Rv*ro*ct
+                        )
+
+    return xmis
+
+@njit(fastmath=True)
+def compute_R_Mpc(R, D_ang):
+    NR = R.shape[0]
+    s0, s1, s2, s3 = D_ang.shape
+    out = np.zeros((NR, s0, s1, s2, s3))
+    factor = np.pi / (180 * 60)
+    for i in range(NR):
+        for a in range(s0):
+            for b in range(s1):
+                for c in range(s2):
+                    for d in range(s3):
+                        out[i,a,b,c,d] = R[i] * factor * D_ang[a,b,c,d]
+    return out
+@njit(fastmath=True)
+def weight_one_halo(weights, one_halo_term, PllM):
+
+    NR, Nl, NM, Nz = one_halo_term.shape
+    Nobs = weights.shape[0] 
+
+    out = np.zeros((NR, Nl, Nobs, NM, Nz))
+
+    for r in range(NR):
+        for l in range(Nl):
+            for o in range(Nobs):
+                for m in range(NM):
+                    for z in range(Nz):
+                        out[r,l,o,m,z] = (  
+                            one_halo_term[r,l,m,z] *
+                            PllM[l,o,m,z]
+                        )
+
+    return out
 
 global check_none
 def check_none(cls):
@@ -54,6 +490,8 @@ def check_none(cls):
 				kwargs = {key: None for key in kwargs}
 			super(Wrapper, self).__init__(*args, **kwargs)
 	return Wrapper
+
+
 
 class Found_Error_Config(Exception):
 	pass
@@ -72,7 +510,35 @@ def prop2arr(prop,delimiter=',',dtype=np.float64, remove_white_spaces = True):
 
 	return np.array(arr,dtype=dtype)
 
+import numpy as np
 
+def cross_covariance_shrinkage(Pb, Pm, return_alpha_only=True):
+
+    N, Nr = Pb.shape
+    Pb_c = Pb - Pb.mean(axis=0)
+    Pm_c = Pm - Pm.mean(axis=0)
+    C_mean = (Pb_c.T @ Pm_c) / N
+    delta2 = 0.0
+    for k in range(N):
+        outer = np.outer(Pb_c[k], Pm_c[k])
+        diff = outer - C_mean
+        delta2 += np.linalg.norm(diff, ord='fro')**2
+    delta2 /= N
+
+    rho2 = np.linalg.norm(C_mean, ord='fro')**2
+
+    if rho2 == 0:
+        alpha = 1.0
+    else:
+        alpha = delta2 / rho2
+        alpha = np.clip(alpha, 0.0, 1.0)
+
+    if return_alpha_only:
+        return alpha
+
+    C_shrunk = (1 - alpha) * C_mean
+
+    return alpha, C_shrunk
 def power_law(x,a,b):
     return a*(x/45)**b
 
@@ -100,7 +566,8 @@ def smoothly_broken_power_law(x, A, alpha1, alpha2, x0, delta):
 def moving_average_func(x,y,size, median = False):
     sort_x = np.sort(x)
     sort_y = np.array(y)[np.argsort(sort_x)]
-    padded_y = np.pad(sort_y, (size // 2, size // 2), mode="edge")
+    pad = int(size // 2)
+    padded_y = np.pad(sort_y, (pad, pad), mode="edge")
     moving_avg_y = np.zeros_like(sort_y, dtype=np.float64)
     moving_err_y = np.zeros_like(sort_y, dtype=np.float64)
     for i in range(len(sort_y)):
@@ -2191,7 +2658,7 @@ def jackknife_covariance(data, width_deg, radii_arcmin, npatches, center=None):
     return cov, m_mean
 
 
-@njit(cache = True, fastmath=True)
+@njit(fastmath=True, cache = True)
 def trapz_flat(y, x = None, axis = -1):
     """
     N‑D trapezoidal integrator for use under @njit.
@@ -2331,7 +2798,101 @@ def P_lob_ltr(lob, ltr, z, **kwargs):
         pdf[pdf<0.] = 0.
         return pdf
 
+def beam_real_space(theta, ell, Bl):
+    theta = np.atleast_1d(theta)
+    kernel = j0(np.outer(ell, theta))
+    integrand = (ell[:, None] * Bl[:, None] * kernel) / (2*np.pi)
+    return np.trapz(integrand, x=ell, axis=0)
 
+def beam2d(theta_beam, Btheta, npix, pixsize):
+    x = (np.arange(npix) - npix//2) * pixsize
+    X, Y = np.meshgrid(x, x)
+    R = np.sqrt(X**2 + Y**2)
+    interp = interp1d(theta_beam,
+                      Btheta,
+                      bounds_error=False,
+                      fill_value=0.0)
+    beam = interp(R)
+    beam /= beam.sum()
+    return R, beam
+
+def ukcmb_to_mjy_factor(freq_GHz,
+                        bandpass,
+                        beam_theta,
+                        beam_profile):
+
+    nu = freq_GHz * 1e9
+
+    x = h.value * nu / (k_B.value * Tcmb)
+
+    dBdT = (
+        2 * k_B.value * nu**2 / c.value**2
+        * x**2
+        * np.exp(x)
+        / (np.exp(x)-1)**2
+    )
+
+    dBdT_eff = simpson(dBdT * bandpass,
+                       x=nu) / simpson(bandpass, x=nu)
+
+
+    omega = 2*np.pi * simpson(
+        beam_profile * np.sin(beam_theta),
+        x=beam_theta
+    )
+
+    factor = (
+        dBdT_eff
+        * omega
+        * 1e-6  
+        / 1e-26    
+    )
+
+    return factor * 1e3 
+
+def convolve_radial_profile(
+        R_profile,
+        profile,
+        R_beam,
+        beam,
+        npix=501,
+        pixsize=0.1):
+        
+    x = (np.arange(npix) - npix//2) * pixsize
+    X, Y = np.meshgrid(x, x)
+
+    RR = np.sqrt(X**2 + Y**2)
+    interp_profile = interp1d(
+        R_profile,
+        profile,
+        bounds_error=False,
+        fill_value=0.0)
+
+    interp_beam = interp1d(
+        R_beam,
+        beam,
+        bounds_error=False,
+        fill_value=0.0)
+
+    profile2d = interp_profile(RR)
+    beam2d = interp_beam(RR)
+
+    beam2d /= beam2d.sum()
+    conv = fftconvolve(profile2d, beam2d, mode="same")
+    rbins = np.arange(0, RR.max(), pixsize)
+
+    profile_out = np.zeros(len(rbins)-1)
+    R_out = np.zeros(len(rbins)-1)
+
+    for i in range(len(rbins)-1):
+
+        mask = (RR >= rbins[i]) & (RR < rbins[i+1])
+
+        if np.any(mask):
+            profile_out[i] = conv[mask].mean()
+            R_out[i] = 0.5*(rbins[i]+rbins[i+1])
+
+    return R_out, profile_out
 
 def random_from_histogram(data = None, prob = None, bin_edges = None, counts = None, bins=100, 
                           cut = False, sigma = 1):

@@ -29,7 +29,7 @@ from scipy.stats import invgauss
 from matplotlib import cm
 from sklearn.mixture import GaussianMixture as GMM
 from sklearn.decomposition import PCA
-
+from scipy.stats import pearsonr
 def sigma_to_percentiles(sigma):
     lower_percentile = stats.norm.cdf(-sigma)*100
     upper_percentile = stats.norm.cdf(sigma)*100
@@ -106,6 +106,11 @@ parser.add_argument("--drop-parameters", "-DP", default = None, help = "Drop par
 parser.add_argument("--plot_1h2h", "-P12", action = "store_true", help = "Plot 1halo and 2halo.")
 parser.add_argument("--plot_median", "-PM", action = "store_true", help = "Plot median of chain.")
 parser.add_argument("--plot_best", "-PB", action = "store_true", help = "Plot best fitting.")
+parser.add_argument("--add_id", "-A", action = "store_true", help = "Add fit id to the plot.")
+parser.add_argument("--add_scale_radius", "-AS", action = "store_true", help = "Add scale radius to the plot.")
+parser.add_argument("--plot_physical", "-PP", action = "store_true", help = "Plot comparison of profiles on physical scale.")
+parser.add_argument("--pearson", "-PR", action = "store_true", help = "Add the pearson-coefficent of the correlation matrix.")
+parser.add_argument("--report_min_chi2", "-RC", action = "store_true", help = "Report min chi2 on corner plots.")
 args = parser.parse_args()
 
 verbose = args.verbose
@@ -281,7 +286,24 @@ elif args.CONFIG_FILE is not None and joint == False:
                 two_halo_kwargs[k] = np.array(arr, dtype = float)
         elif "dict" in two_halo_kwargs[k]:
             two_halo_kwargs[k] = eval(two_halo_kwargs[k])
-
+    use_sigma_sys = str2bool(model_config["use_sigma_sys"])
+    if use_sigma_sys == True:
+        prior_config_sys = config["SIGMA_SYSTEMATIC"]
+        prior_parameters_sys = dict(prior_config_sys)
+        prior_parameters_dict_sys = {
+            key: list(prop2arr(prior_parameters_sys[key], dtype=str))
+            for key in list(prior_parameters_sys.keys())
+        }
+        prior_parameters_sys = list(prior_parameters_dict_sys.values())
+        labels_sys = np.array(
+        [
+            list(prior_parameters_dict_sys.keys())[i]
+            for i in range(len(prior_parameters_sys))
+            if "free" in prior_parameters_sys[i]
+        ]
+        ).astype(str)
+        n_parameters_sys = len(prior_parameters_sys)
+        params_indxs.append([params_indxs[-1][1] + 1, params_indxs[-1][1] + n_parameters_sys])
     two_halo_power = two_halo_kwargs["two_halo_power"]
     if two_halo_power == True:
         prior_config_2h = config["PRIORS_TWO_HALO_POWER"]
@@ -315,6 +337,7 @@ elif args.CONFIG_FILE is not None and joint == False:
     delta = float(model_config["delta"]) if "delta" in list(model_config.keys()) else 500
     background = model_config["background"] if "background" in list(model_config.keys()) else "critical"
     eval_mass = str2bool(model_config["eval_mass"]) if "eval_mass" in list(model_config.keys()) else False
+
     infere_mass = str2bool(model_config["infere_mass"]) if "infere_mass" in list(model_config.keys()) else False
 
     subr_grid = str2bool(model_config["subr_grid"]) if "subr_grid" in list(model_config.keys()) else False
@@ -355,9 +378,10 @@ elif args.CONFIG_FILE is not None and joint == False:
     if use_two_halo_term == True and two_halo_power == True:
         labels = np.array(list(labels) + list(labels_2h))
         prior_parameters = list(prior_parameters) +  list(prior_parameters_2h)
-
+    if use_sigma_sys == True:
+        labels = np.array(list(labels) + list(labels_sys))
+        prior_parameters = list(prior_parameters) +  list(prior_parameters_sys)
     n_parameters = len(labels)
-
     priors_funcs = []
     priors_args = []
     
@@ -535,6 +559,15 @@ elif args.CONFIG_FILE is not None and joint == True:
             }
             prior_parameters_mc = list(prior_parameters_dict_mc.values())
             mis_centering_params = [0,0]
+        use_sigma_sys = str2bool(model_config["use_sigma_sys"])
+        if use_sigma_sys == True:
+            prior_config_sys = dict(config["SIGMA_SYSTEMATIC"])
+            prior_parameters_sys = dict(prior_config_sys)
+            prior_parameters_dict_sys = {
+                key: list(prop2arr(prior_parameters_sys[key], dtype=str))
+                for key in list(prior_parameters_sys.keys())
+            }
+            prior_parameters_sys = list(prior_parameters_dict_sys.values())
         two_halo_kwargs["cosmo"] = ccl.CosmologyVanillaLCDM()
 
         prior_parameters = dict(prior_config)
@@ -551,7 +584,9 @@ elif args.CONFIG_FILE is not None and joint == True:
             hm_model_added = True
             prior_parameters += prior_parameters_hm
             prior_parameters_dict = {**prior_parameters_dict, **prior_parameters_dict_hm}
-
+        if use_sigma_sys == True:
+            prior_parameters += prior_parameters_sys
+            prior_parameters_dict = {**prior_parameters_dict, **prior_parameters_dict_sys}
         if len(params_indx) == 0:
             params_indx.append((0,len(prior_parameters)))
         else:
@@ -709,7 +744,7 @@ def main():
             pmax = np.max(profiles)
             errors = [c.error_in_mean for c in clusters]
             num_profiles = len(clusters)
-            profiles_per_row = 2
+            profiles_per_row = 4
             num_rows = (num_profiles + profiles_per_row - 1) // profiles_per_row
             fig, axes = plt.subplots(num_rows, profiles_per_row, figsize=(18, 4 * num_rows), sharey = False, sharex = True)
             axes = axes.flatten()
@@ -784,7 +819,8 @@ def main():
                     off_diag = off_diag, ymin = ymin, ymax = ymax, plot_degenerancies = args.plot_degenerancies,
                     plot_comparison = plot_comparison, profile_comparison_kwargs = profile_comparison_kwargs,
                     legend_pos = legend_pos, remove_stuck = args.remove_stuck, drop_parameters = drop_parameters,
-                    plot_1h2h = args.plot_1h2h, plot_median = args.plot_median, plot_best = args.plot_best
+                    plot_1h2h = args.plot_1h2h, plot_median = args.plot_median, plot_best = args.plot_best,
+                    plot_physical_profiles = args.plot_physical
                     )
     elif joint == True:
         plot_joint_mcmc(paths, samples_file, labels, params_indx, profile_models, 
@@ -793,7 +829,8 @@ def main():
                 tau = args.tau, use_signal = True, method = args.extract_method, share_plot = args.share_plot,
                 plot_cov = args.cov_matrix, plot_corr = args.corr_matrix, xlabels = xlabels, ylabels = ylabels,
                 titles = titles, _chi2 = args.plot_chi2, fixed_params = fixed_params, free_params = free_params,
-                jpriors = jpriors_funcs, jpriors_args = jpriors_args, xscales = xscales, yscales = yscales)
+                jpriors = jpriors_funcs, jpriors_args = jpriors_args, xscales = xscales, yscales = yscales,
+                plot_physical_profiles = args.plot_physical)
 
 def plot_joint_mcmc(data_paths, source_file, labels, params_indx, profile_models = None, ndims = None, nwalkers = None, plot = False, discard = 0,
                 steps = False, corner_ = False, make_copy = True, method = "median", tau = False, thin = 1,
@@ -1006,7 +1043,7 @@ def plot_joint_mcmc(data_paths, source_file, labels, params_indx, profile_models
         if plot == True:
             num_profiles = N_clusters
             if share_plot == False:
-                profiles_per_row = 3
+                profiles_per_row = 4
                 num_rows = (num_profiles + profiles_per_row - 1) // profiles_per_row
                 fig, axes = plt.subplots(num_rows, profiles_per_row, figsize=(20, 8 * num_rows), sharey = True, sharex = True)
                 axes = axes.flatten()
@@ -1030,8 +1067,9 @@ def plot_joint_mcmc(data_paths, source_file, labels, params_indx, profile_models
                     fit = np.median(signal2bound[:,i,:], axis = 0)
                     lower_bound, upper_bound = np.percentile(signal2bound[:,i,:], [16, 84], axis = 0)
                     lower_bound = fit - lower_bound
-                    upper_bound = upper_bound - fit              
-                    plot_profiles(R, profiles[i], func, params, c.cov, labels_latex, lower, upper,
+                    upper_bound = upper_bound - fit  
+                    background = c.background if hasattr(c, "background") else 0 
+                    plot_profiles(R, profiles[i] - background, func, params, c.cov, labels_latex, lower, upper,
                                 np.max(ln_likelihood), np.mean(all_clusters.z), ax = ax, fit = fit, lower_bound = lower_bound,
                                 upper_bound = upper_bound, signal = signal2bound[:,i,:], 
                                 specific_pte = specific_pte, specific_chi2 = specific_chi2,
@@ -1090,7 +1128,11 @@ def plot_joint_mcmc(data_paths, source_file, labels, params_indx, profile_models
                     lower_bound, upper_bound = np.percentile(signal2bound[:,idx,:], [16, 84], axis = 0)
                     lower_bound = fit - lower_bound
                     upper_bound = upper_bound - fit 
-                    profiles_kwargs = set_default(kwargs.pop("profiles_kwargs",{}), default_profiles_kwargs)    
+                    profiles_kwargs = set_default(kwargs.pop("profiles_kwargs",{}), default_profiles_kwargs)  
+
+                    if hasattr(c, "background"):
+                        profile = profile - c.background
+
                     signal2bound_i = signal2bound[:,i,:] if signal2bound is not None else None
                     plot_profiles(R + i*0.1, profiles[idx], func, params, c.cov, labels_latex, lower, upper,
                                 np.max(ln_likelihood), np.mean(c.z), ax = ax, fit = fit, lower_bound = lower_bound,
@@ -1140,7 +1182,7 @@ def plot_general_mcmc(main_path, source_file, model, labels, ndims = None, nwalk
                        compute_mass = False, off_diag = False, ymin = None, ymax = None,
                        plot_degenerancies = False, plot_comparison = False, profile_comparison_kwargs = {},
                        legend_pos = "best", remove_stuck = False, drop_parameters = None,
-                       plot_1h2h = False, plot_median = True, plot_best = False,
+                       plot_1h2h = False, plot_median = True, plot_best = False, plot_physical_profiles = False, 
                        **kwargs):
     if drop_parameters is not None:
         labels = np.array([labels[i] for i in range(len(labels)) if i not in drop_parameters])
@@ -1157,55 +1199,77 @@ def plot_general_mcmc(main_path, source_file, model, labels, ndims = None, nwalk
     paths = []
     
     apply_filter_per_profile = str2bool(model_config["apply_filter_per_profile"])
-    
-    for path in available_paths:
-        if path in ignore:
-            continue
-        current_path = main_path + path
-        try:
-            if is_running_via_nohup() == False and args.ask_to_add == True:
-                add_cluster = input(f"Do you want to add the next cluster? (Y, yes or enter to add it):\n {clusters}from: \033[35m{path}\033[0m\n").strip().lower()
-                if add_cluster in ["y","yes",""]:
-                    paths.append(current_path)
-                else:
-                    continue
-            else:
-                paths.append(current_path)
-        except Exception as e:
-            print(f"The next exception occurred trying to load {current_path}: \033[31m{e}\033[0m")
-            continue
+    available_files = os.listdir(main_path)
+    if "sigma.txt" in available_files and "xobs.txt" in available_files and "yobs.txt" in available_files:
+        R = np.loadtxt(main_path + "xobs.txt")
+        cov = np.loadtxt(main_path + "sigma.txt") if "cov.txt" not in available_files else np.loadtxt(main_path + "cov.txt")
+        bins = np.loadtxt(main_path + "bins.txt", skiprows = 1)
+        richness_bins = bins[:,0:2]
+        redshift_bins = bins[:,2:4]
+        clusters = []
+        errors = np.sqrt(np.diag(cov)).reshape((len(richness_bins), len(R)))
+        profiles = np.reshape(np.loadtxt(main_path + "yobs.txt"), (len(richness_bins), len(R)))
 
+        m200m_z = np.loadtxt(main_path + "m200m_z.txt") if "m200m_z.txt" in available_files else np.zeros((len(richness_bins), 2))
+        m200m = m200m_z[:,0]
+        meanz = m200m_z[:,1]
+
+        paths = [main_path + path for path in available_paths]
+        for i in range(len(richness_bins)):
+            ci = grouped_clusters.empty()
+            ci.richness_bin = richness_bins[i]
+            ci.redshift_bin = redshift_bins[i]
+            ci.R = R
+            ci.mean_profile = profiles[i]
+            ci.error_in_mean = errors[i] 
+            ci.cov = cov[i*len(R) : (i+1)*len(R), i*len(R) : (i+1)*len(R)]
+            np.shape(ci.cov)
+            clusters.append(ci)
+            ci.richness = ci.richness_bin[0]
+            ci.z = ci.redshift_bin[0]
+            ci.mean_mass = m200m[i]
+            ci.mean_redshift = meanz[i]
+        func = None
+    else:
+        for path in available_paths:
+            if path in ignore:
+                continue
+            current_path = main_path + path
+            try:
+                if is_running_via_nohup() == False and args.ask_to_add == True:
+                    add_cluster = input(f"Do you want to add the next cluster? (Y, yes or enter to add it):\n {clusters}from: \033[35m{path}\033[0m\n").strip().lower()
+                    if add_cluster in ["y","yes",""]:
+                        paths.append(current_path)
+                    else:
+                        continue
+                else:
+                    paths.append(current_path)
+            except Exception as e:
+                print(f"The next exception occurred trying to load {current_path}: \033[31m{e}\033[0m")
+                continue
+        if use_signal == True:
+            clusters, cov = grouped_clusters.compute_joint_cov(paths = paths, off_diag = False)
+            func = None
+        else:
+
+            func,cov, about_clusters, clusters, _, funcs = grouped_clusters.stacked_halo_model_func_by_paths(getattr(profiles_module, profile_stacked_model),
+                                            full = True, Mbins = Mbins, Rbins = rbins, Zbins = zbins, paths = paths, verbose = True,
+                                            use_filters = use_filters, filters = filters_dict,
+                                            completeness_kwargs = dict(completeness_config), use_two_halo_term = use_two_halo_term, off_diag = off_diag,
+                                            two_halo_kwargs = two_halo_kwargs, use_mis_centering = use_mis_centering, fixed_RM_relationship = fixed_halo_model
+                                            , background = background, delta = delta, eval_mass = eval_mass, apply_filter_per_profile = apply_filter_per_profile
+                                            ,rebinning = use_rebinning, rebinning_kwargs = rebinning_kwargs)
+        
     rbins, zbins, Mbins = completeness_config.pop("rbins", 25), completeness_config.pop("zbins", 25), completeness_config.pop("Mbins", 25)
     rbins = int(rbins)
     zbins = int(zbins)
     Mbins = int(Mbins)
     sort_by_redshift = True
-    if use_signal == True:
-        clusters, cov = grouped_clusters.compute_joint_cov(paths = paths, off_diag = off_diag)
-        func = None
-    else:
-
-        func,cov, about_clusters, clusters, _, funcs = grouped_clusters.stacked_halo_model_func_by_paths(getattr(profiles_module, profile_stacked_model),
-                                        full = True, Mbins = Mbins, Rbins = rbins, Zbins = zbins, paths = paths, verbose = True)
-                                        # #use_filters = use_filters, filters = filters_dict,
-                                        # completeness_kwargs = dict(completeness_config), use_two_halo_term = use_two_halo_term, off_diag = off_diag,
-                                        # two_halo_kwargs = two_halo_kwargs, use_mis_centering = use_mis_centering, fixed_RM_relationship = fixed_halo_model
-                                        # , background = background, delta = delta, eval_mass = eval_mass, apply_filter_per_profile = apply_filter_per_profile
-                                        # ,rebinning = use_rebinning, rebinning_kwargs = rebinning_kwargs)
-    
 
     bins = np.array([[*c.richness_bin, *c.redshift_bin] for c in clusters])
     sorted_idx = np.lexsort((bins[:,3], bins[:,2], bins[:,1], bins[:,0]))
     bins = bins[sorted_idx]
     clusters = [clusters[i] for i in sorted_idx]
-    cluster, cov = grouped_clusters.compute_joint_cov(off_diag = off_diag, groups = clusters, corr = False)
-    masses = []
-    for c in clusters:
-        richness = c.richness
-        redshift = c.z
-        mass = 10**(14.489)*(richness/40)**(1.356)*(redshift/(1+0.35))**(-0.3)
-        masses.append(np.mean(mass))
-        c.mean_M = np.mean(mass)
     profiles = np.array([c.mean_profile for c in clusters])
     R = np.loadtxt(f"{main_path}/xobs.txt")
     sigma = np.loadtxt(f"{main_path}/sigma.txt")
@@ -1222,6 +1286,7 @@ def plot_general_mcmc(main_path, source_file, model, labels, ndims = None, nwalk
         copy = f"/{source_file.split('.')[0]}_copy.h5"
         shutil.copy(source_file, copy)
         source_file = copy
+
     backend = emcee.backends.HDFBackend(source_file, read_only = True)
     unflatten_chain = backend.get_chain(discard = discard, thin = thin)
 
@@ -1284,7 +1349,7 @@ def plot_general_mcmc(main_path, source_file, model, labels, ndims = None, nwalk
             _, nsigma = nsigma_from_posterior(c, val)
             print(f"{labels[i]} is {nsigma} aways from {val}.")
         if np.all(np.isnan(Masses)) == False and args.infere_mass == True:
-            profiles_per_row = 3
+            profiles_per_row = 4
             num_profiles = len(clusters)
             num_rows = (num_profiles + profiles_per_row - 1) // profiles_per_row
             fig = plt.figure(figsize=(18 + num_rows, 6 * num_rows))
@@ -1512,11 +1577,15 @@ def plot_general_mcmc(main_path, source_file, model, labels, ndims = None, nwalk
             steps_kwargs = set_default(kwargs.pop("steps_kwargs",{}), default_steps_kwargs)
             plot_steps(chain, backend, chi2_values,**steps_kwargs)
         if corner_:
+            n_files = len([name for name in os.listdir(output_path) if "corner" in name])
+            output_file_corner = f"{output_path}/corner_{n_files}.png" if args.add_id == True else f"{output_path}/corner.png"
+            chain = chain[chain[:,3] >= -0.74]
+            truhts = params if args.report_min_chi2 == False else chain[np.argmin(blobs["CHI2"])]
             default_corner_kwargs = (
                 ("truths", params),
                 ("truths_color","black"),
                 ("corner_color", "blue"),
-                ("output_file", f"{output_path}/corner.png"),
+                ("output_file", output_file_corner),
                 ("labels",labels_latex),
                 ("fontsize", 16),
                 ("range_sigma_ratio", float(args.range_sigma_ratio)),
@@ -1541,22 +1610,29 @@ def plot_general_mcmc(main_path, source_file, model, labels, ndims = None, nwalk
             if plot_degenerancies == False:
                 chi2_values2 = blobs["CHI2"]
                 signal = blobs["SIGNAL"]
+                
                 chain2 = backend.get_chain()
-                P1 = blobs["ONE_HALO"] 
-                P2 = blobs["TWO_HALO"]
+
                 flat_idx = np.nanargmin(chi2_values)
                 step_idx, walker_idx = np.unravel_index(flat_idx, chi2_values2.shape)
                 best_params = chain2[step_idx, walker_idx,:]
+                print("best fit =",best_params)
                 best_signal = signal[step_idx, walker_idx,:]
                 best_signal = np.reshape(best_signal, (len(clusters), len(R)))
-                best_signal1halo = P1[step_idx, walker_idx,:]
-                best_signal2halo = P2[step_idx, walker_idx,:]
-                best_signal1halo = np.reshape(best_signal1halo, (len(clusters), len(R)))
-                best_signal2halo = np.reshape(best_signal2halo, (len(clusters), len(R)))
+                if plot_1h2h == True:
+                    P1 = blobs["ONE_HALO"] 
+                    P2 = blobs["TWO_HALO"]
+                    best_signal1halo = P1[step_idx, walker_idx,:]
+                    best_signal2halo = P2[step_idx, walker_idx,:]
+                    best_signal1halo = np.reshape(best_signal1halo, (len(clusters), len(R)))
+                    best_signal2halo = np.reshape(best_signal2halo, (len(clusters), len(R)))
+                else:
+                    best_signal1halo = np.full(np.shape(best_signal), np.nan)
+                    best_signal2halo = np.full(np.shape(best_signal), np.nan)
                 np.savetxt(f"{output_path}/best_signal.txt", best_signal)
                 num_profiles = len(clusters)
                 if share_plot == False:
-                    profiles_per_row = 3
+                    profiles_per_row = 4
                     num_rows = (num_profiles + profiles_per_row - 1) // profiles_per_row
                     fig = plt.figure(figsize=(10 + 5*num_rows, 5 * num_rows))
                     if args.dont_show_results == True:
@@ -1582,6 +1658,7 @@ def plot_general_mcmc(main_path, source_file, model, labels, ndims = None, nwalk
                     axs = np.reshape(axs, (nrows, ncols))     
                     axes = axs.flatten()
                     counter = 0
+                    
                     for i in range(len(clusters)):
                         counter+=1
                         if counter <= num_profiles:
@@ -1602,13 +1679,16 @@ def plot_general_mcmc(main_path, source_file, model, labels, ndims = None, nwalk
                                     ("show_results", False)
                                     )  
                             fit = np.nanmedian(signal2bound[:,idx,:], axis = 0)
-                            lower_bound, upper_bound = np.nanpercentile(signal2bound[:,idx,:], [16, 84], axis = 0)
+                            lower_bound, upper_bound = np.nanpercentile(signal2bound[:,idx,:], [2.5, 97.5], axis = 0)
                             lower_bound = fit - lower_bound
                             upper_bound = upper_bound - fit 
                             best_fit = best_signal[idx]
-
                             profiles_kwargs = set_default(kwargs.pop("profiles_kwargs",{}), default_profiles_kwargs)                
-                            plot_profiles(R, c.mean_profile, func, params, c.cov, labels_latex, lower, upper,
+                            profile = c.mean_profile
+                            print(zmin, zmax)
+                            print(rmin, rmax)
+                            print(best_fit)
+                            plot_profiles(R, profile, func, params, c.cov, labels_latex, lower, upper,
                                         np.max(ln_likelihood), np.mean(clusters[0].z), ax = ax, fit = fit, lower_bound = lower_bound, show_invidual_chi2 = True,
                                         upper_bound = upper_bound, signal = signal2bound[:,idx,:], P1halo = P1halo[:,idx,:], P2halo = P2halo[:,idx,:],
                                         best_fit = best_fit, best_fit1halo = best_signal1halo[idx], best_fit2halo = best_signal2halo[idx],
@@ -1616,8 +1696,17 @@ def plot_general_mcmc(main_path, source_file, model, labels, ndims = None, nwalk
                             ax.set_title("")
                             ax.set_ylabel("")
                             ax.set_xlabel("")
-                            label = r"$\lambda \in [%.i,%.i]\;,\;z \in [%.2f, %.2f]$" % (rmin, rmax, zmin, zmax)
-                            ax.text(0.95, 0.95, label, transform=ax.transAxes, fontsize=12, ha='right', va='top')
+                            
+                            if i == ncols - 1:
+                                yticks = axes[i].get_yticks()
+                                yticks = yticks[np.where((yticks >= ymin) & (yticks <= ymax))]
+                                yticks = yticks[1::]
+                                axes[i].set_yticks(yticks)
+                                axes[i].set_yticklabels([r"$10^{%.i}$" % int(np.log10(y)) for y in yticks])
+                            if hasattr(c, "tng_profile"):
+                                ax.errorbar(R + 0.15, c.tng_profile, yerr = c.tng_errors, color = "purple", label = "TNG300-3", fmt = "-o", lw = 2, alpha = 0.5)
+                            label = r"$\mathbf{\lambda \in [%.i,%.i]\;},\;\mathbf{z \in [%.2f, %.2f]}$" % (rmin, rmax, zmin, zmax)
+                            ax.text(0.95, 0.95, label, transform=ax.transAxes, fontsize= 15, ha='right', va='top')
                             if args.show_individuals_chi2:
                                 current_cov = c.cov
                                 diag = np.sqrt(np.diag(current_cov))
@@ -1628,9 +1717,498 @@ def plot_general_mcmc(main_path, source_file, model, labels, ndims = None, nwalk
                                 ax.text(0.95, 0.88, "$\chi^2 = %.2f\;(%.2f)$ \n $PTE = %.4f$" % (current_chi2, current_chi2_no_corr, current_pte), 
                                     transform=ax.transAxes, 
                                     fontsize=12, ha='right', va='top')
-                                ax.text(0.95, 0.75, "$\log_{10}{M} = %.2f [M_{\odot}]$" % (np.log10(c.mean_M)), transform=ax.transAxes, fontsize=12, ha='right', va='top')
+                                ax.text(0.95, 0.75, "$\log_{10}{M} = %.2f [M_{\odot}]$" % (np.log10(c.mean_mass)), transform=ax.transAxes, fontsize=12, ha='right', va='top')
                         else:
                             ax.axis('off')
+                    if plot_physical_profiles == True:
+                        for i in range(len(clusters)):
+                            print(clusters[i].richness_bin)
+                        M200m = np.array([np.mean(c.mean_mass) for c in clusters])
+                        z = np.array([np.mean(c.mean_redshift) for c in clusters])
+
+                        z0 = 0.47
+                        M0 = 10**(14.35)
+
+                        rho_c = planck18.critical_density(z).to(u.Msun / u.Mpc**3).value
+                        rho_m = planck18.Om(z) * rho_c
+
+
+                        M500 = 10**fM200toM500((np.log10(M200m), z))
+                        M500 = np.float64(M500)
+                        R500 = (M500 / (4 * np.pi / 3 * 500 * rho_c))**(1/3)
+
+                        R200m = (3 * M200m / (4 * np.pi * 200 * rho_m))**(1 / 3)
+                        labels = [l.replace("}","").replace("{","").replace("\\","") for l in labels]
+                        concentration_params = [i for i in range(len(labels)) if "c_200" in labels[i]]
+                        c200_0 = 10**params[concentration_params[0]] if "log" in labels[0] else params[concentration_params[0]]
+                        c200_M = params[concentration_params[1]] if len(concentration_params) > 1 else 0
+                        c200_z = params[concentration_params[2]] if len(concentration_params) > 2 else 0
+
+                        c = c200_0 * (M200m/M0)**(c200_M) * ((1 + z)/(1 + z0))**(c200_z)
+                        c_dm = 5.7*(M200m/M0)**(-0.1)*((1 + z)/(1 + z0))**(-1) #duffy et al 2008
+                        
+                        rs = R200m/c
+
+                        arcmin2Mpc = planck18.kpc_comoving_per_arcmin(z).value / 1000
+                        R200_Mpc = R200m * arcmin2Mpc
+
+                        Rmin = np.min(clusters[0].R)*arcmin2Mpc
+                        Rmax = np.max(clusters[0].R)*arcmin2Mpc
+                        Rmin_Mpc = np.min(Rmin)
+                        Rmax_Mpc = np.min(Rmax)
+                        fig2, ax2 = plt.subplots(figsize = (12, 12))
+                        ax2.scatter(M200m, c, lw = 4, label = "ICM")
+                        ax2.scatter(M200m, c_dm, color = "black", label = "DM", )
+                        ax2.set(xlabel = r"$M_{200 m}$ [$M_{\odot}$]", ylabel = r"$c_{200 m}$", xscale = "log")
+                        ax2.legend()
+                        fig2.savefig(main_path +"concentration.png")
+
+                        fig2, ax2 = plt.subplots(figsize = (12,12))
+                        ax2.scatter(R200m, rs, lw = 4, label = "ICM")
+                        ax2.scatter(R200m, R200m/c_dm, color = "black", label = "DM")
+                        ax2.set(xlabel = r"$R_{200 m}$ [$Mpc/h$]", ylabel = r"$r_s$ [$Mpc/h$]")
+                        ax2.legend()
+                        fig2.savefig(main_path +"rs.png")
+                        fixed_beta = True   
+                        fixed_alpha = False
+
+                        if fixed_beta == True:
+                            beta = 4.13
+                        else:
+                            i_beta = [i for i in range(len(labels)) if "beta" in labels[i]][0]
+                            
+                            beta = params[i_beta]
+                        if fixed_alpha == True:
+                            alpha = 1.33
+                        else:
+                            i_alpha = [i for i in range(len(labels)) if "alpha" in labels[i]][0]
+                            
+                            alpha = params[i_alpha]
+                            
+
+                        R = clusters[0].R
+
+                        R_Mpc = np.logspace(np.log10(Rmin_Mpc), np.log10(Rmax_Mpc), 20)
+                        r_Mpc = np.zeros((len(clusters), len(R)))
+                        for i in range(len(clusters)):
+                            r_Mpc[i] = R * planck18.kpc_comoving_per_arcmin(z[i]).value / 1000
+                        
+                        gamma_params = [i for i in range(len(labels)) if "gamma" in labels[i]]
+                        gamma0 = 10**params[gamma_params[0]] if "log" in labels[0] else params[gamma_params[0]]
+                        gamma_M = params[gamma_params[1]] if len(gamma_params) > 1 else 0
+                        gamma_z = params[gamma_params[2]] if len(gamma_params) > 2 else 0
+
+                        gamma = gamma0 * (M200m/M0)**(gamma_M) * ((1 + z)/(1 + z0))**(gamma_z)
+
+                        P0_params = [i for i in range(len(labels)) if "P" in labels[i]]
+                        P0 = 10**params[P0_params[0]] if "log" in labels[0] else params[P0_params[0]]
+                        P_M = params[P0_params[1]] if len(P0_params) > 1 else 0
+                        P_z = params[P0_params[2]] if len(P0_params) > 2 else 0
+
+                        P = 10**(9.44) * (M200m/M0)**(P_M) * planck18.efunc(z)**(P_z)
+
+                        R200 = (M200m / (4.0 * np.pi / 3.0 * 200.0 * rho_m)) ** (1.0 / 3.0)
+
+                        physical_stacked_model = False
+
+                        mcdonald14_all_highz = [3.47, 2.59, 0.15, 2.27, 3.48]
+
+                        params_battaglia = [8.403, 0.154, -0.758, -0.3, 1.0, 4.35, 0.0393, 0.415, 0.497, -0.00865, 0.731]
+                        params = [np.log10(P0), P_M, P_z, np.log10(gamma0), gamma_M, gamma_z, beta, 0.0, 0.0, alpha, 0.0, 0.0, np.log10(c200_0), c200_M, c200_z]                   
+                        
+                        params_lim = [np.log10(P0), 2/3, 8/3, -1.26, -0.83, 0., 3.76, 0., 0., 2., 0.0, 0.0, 0.20, 0.517, 0.]
+                        params_arnaud = [8.403, 1.177, 0.3081, 5.4905, 1.0510]
+                        mcdonald14_all_highz = [3.47, 2.59, 0.15, 2.27, 3.48]
+
+                        params_tng = [10.56, 0.61, 2.65, -0.59, -0.24, -0.18, beta, 0.0, 0.0, 1.22, 0., 0., 0.52, -0.08, -0.50]
+                        gamma_lim = 10**(-1.26)*((M500/M0)**(-0.83))
+                        c200_lim = 10**(0.34)*((M500/M0))**0.517 
+
+                        P_tng = 10**(10.35)*(M200m/M0)**(0.61) * planck18.efunc(z)**(2.66)
+                        gamma_tng = 10**(-0.46)*((M200m/M0)**(-0.16))*((1 + z)/(1 + z0))**(-1.27)
+                        c200_tng = 10**(0.42)*((M200m/M0))**(-0.0)*((1 + z)/(1 + z0))**(-0.74)
+
+                        ycompton_factor = ((const.sigma_T / (const.m_e * const.c**2))).value
+                        y_factor = (const.sigma_T / (const.m_e * const.c**2)).to(u.s**2/u.Msun).value
+                        fig2, ax2 = plt.subplots(2,len(clusters)//2, figsize = (8*len(clusters)//2, 16), sharey = True)
+
+                        if physical_stacked_model == True:  
+
+                            profiles_dm = np.zeros((len(clusters), len(R_Mpc)))
+
+                            ycompton_factor = ((const.sigma_T / (const.m_e * const.c**2))).value
+                            func,cov, about_clusters, clusters, _, funcs = grouped_clusters.stacked_halo_model_func_by_paths(getattr(profiles_module, profile_stacked_model),
+                                    full = True, Mbins = 25, Rbins = 35, Zbins = 25, paths = paths,
+                                    verbose_pivots = True, use_filters = False, filters = filters_dict, completeness_kwargs = dict(completeness_config), 
+                                    use_two_halo_term = use_two_halo_term, two_halo_kwargs = two_halo_kwargs, use_mis_centering = use_mis_centering, 
+                                    fixed_RM_relationship = fixed_halo_model, weighted = False
+                                    ,background = background, delta = delta, eval_mass = True, 
+                                    apply_filter_per_profile = apply_filter_per_profile
+                                    ,rebinning = False, rebinning_kwargs = rebinning_kwargs, numba = False
+                                    ,subr_grid = subr_grid, subr_grid_kwargs = subr_grid_kwargs, physical = True)
+
+                            print("==computing ycompton model==")
+                            profiles_icm = np.reshape(func(R_Mpc, params), (len(clusters), len(R_Mpc)))
+                            print("==computing Battaglia model==")
+                            profiles_battaglia = np.reshape(func(R_Mpc, params_battaglia, model1h = Battaglia16, model2h = Battaglia16), (len(clusters), len(R_Mpc)))
+                            print("==computing Arnaud model==")
+                            profiles_arnaud = np.reshape(func(R_Mpc, params_arnaud, model1h = Arnaud10, model2h = Arnaud10), (len(clusters), len(R_Mpc)))
+                            print("==computing Lim model==")
+                            profiles_lim = np.reshape(func(R_Mpc, params_lim), (len(clusters), len(R_Mpc)))
+                            print("==computing TNG model==")
+                            profiles_tng = np.reshape(func(R_Mpc, params_tng), (len(clusters), len(R_Mpc)))
+                            print("==computing McDonald model==")
+                            profiles_mcdonald = np.reshape(func(R_Mpc, mcdonald14_all_highz, model1h = Arnaud10, model2h = Arnaud10), (len(clusters), len(R_Mpc)))
+
+                            for i in range(len(profiles_lim)):
+                                Mi = M200m[i]
+                                zi = z[i]
+                                R200m_i = R200m[i]
+                                R_com = R_Mpc #* (1 + zi)
+                                rs_i = R200m_i/c[i]
+
+                                rs_lim = R200m[i]/c200_lim[i]
+                                r_match = rs_lim
+                                P_match = P200_self_similar(Mi, zi, P_M, P_z)*2.4863e-18 * 1.615e+15 * 10**P0 / (
+                                    (r_match/rs_i)**gamma[i] *
+                                    (1 + (r_match/rs_i)**alpha)**((beta - gamma[i])/alpha)
+                                )
+                                shape_lim = (
+                                    (r_match/rs_lim)**gamma_lim[i] *
+                                    (1 + (r_match/rs_lim)**2)**((3.76 - gamma_lim[i])/2)
+                                )
+                                
+                                norm_lim = P_match * shape_lim
+                                
+                                profiles_lim[i] = norm_lim / (
+                                    (R_com/rs_lim)**gamma_lim[i] *
+                                    (1 + (R_com/rs_lim)**2)**((3.76 - gamma_lim[i])/2)
+                                    )
+                        else:
+                            profiles_icm = np.zeros((len(clusters), len(R_Mpc)))
+                            profiles_dm = np.zeros((len(clusters), len(R_Mpc)))
+                            profiles_arnaud = np.zeros((len(clusters), len(R_Mpc)))
+                            profiles_lim = np.zeros((len(clusters), len(R_Mpc)))
+                            profiles_battaglia = np.zeros((len(clusters), len(R_Mpc)))
+                            profiles_tng = np.zeros((len(clusters), len(R_Mpc)))
+                            profiles_mcdonald = np.zeros((len(clusters),len(R_Mpc)))
+                            for i in range(len(clusters)):
+                                Mi = M200m[i]
+                                zi = z[i]
+                                R200m_i = R200m[i]
+                                R_com = R_Mpc #* (1 + zi)
+                                rs_i = R200m_i/c[i]
+                                rs_lim = R200m_i/c200_lim[i]
+                                rs_tng = R200m_i/c200_tng[i]
+                                profiles_icm[i] = getattr(profiles_module, model_config["profile"])(R_com, 10, Mi, zi, params, rbins = 200)
+                                profiles_arnaud[i] = Arnaud10(R_com, 10, Mi, zi, params_arnaud, rbins = 200)
+                                profiles_mcdonald[i] = Arnaud10(R_com, 10, Mi, zi, mcdonald14_all_highz)
+                                profiles_battaglia[i] = Battaglia16(R_com, 10, Mi, zi, params_battaglia)
+                                profiles_tng[i] = P_tng[i]/((R_com/rs_tng)**gamma[i] *(1 + (R_com/rs_tng)**alpha)**((beta - gamma[i])/alpha))*ycompton_factor
+                                r_match = rs_lim
+                                P_match = P200_self_similar(Mi, zi, P_M, P_z)*2.4863e-18 * 1.615e+15 * 10**P0 / (
+                                    (r_match/rs_i)**gamma[i] *
+                                    (1 + (r_match/rs_i)**alpha)**((beta - gamma[i])/alpha)
+                                )
+                                shape_lim = (
+                                    (r_match/rs_lim)**gamma_lim[i] *
+                                    (1 + (r_match/rs_lim)**2)**((3.76 - gamma_lim[i])/2)
+                                )
+                                
+                                norm_lim = P_match * shape_lim
+                                
+                                profiles_lim[i] = norm_lim / (
+                                    (R_com/rs_lim)**gamma_lim[i] *
+                                    (1 + (R_com/rs_lim)**2)**((3.76 - gamma_lim[i])/2)
+                                    )
+                        for i in range(len(clusters)):
+                            zmin, zmax = clusters[i].redshift_bin
+                            lambda_min, lambda_max = clusters[i].richness_bin
+                            row_indx = 0 if zmin < 0.3 else 1
+                            ax2[row_indx,i//2].plot(R_Mpc, profiles_icm[i], label = "ICM", color = "orange", lw = 3, alpha = 0.8)
+                            #ax2[row_indx,i//2].plot(R_Mpc, profiles_dm[i]/np.max(profiles_dm[i])*np.max(profiles_icm[i]), label = "DM (Duffy et al 2008)", color = "black", lw = 3, alpha = 0.8, ls = "--")
+                            ax2[row_indx,i//2].plot(R_Mpc, profiles_arnaud[i], label = "ICM (Arnaud et al 2010)", color = "purple", lw = 3, alpha = 0.8, ls = "dashed")
+                            ax2[row_indx,i//2].plot(R_Mpc, profiles_lim[i], label = "ICM (Lim et al 2023)", color = "blue", lw = 3, alpha = 0.8, ls = "dashed")
+                            ax2[row_indx,i//2].plot(R_Mpc, profiles_battaglia[i], label = "ICM (Battaglia et al 2016)", color = "green", lw = 3, alpha = 0.8, ls = "dashed")
+                            ax2[row_indx,i//2].plot(R_Mpc, profiles_tng[i], label = "ICM (TNG)", color = "red", lw = 3, alpha = 0.8, ls = (0, (3, 1, 1, 1, 1, 1)))
+                            ax2[row_indx,i//2].axvline(R200m[i], color = "darkgreen", ls = "dotted", lw = 3, alpha = 0.8, label = "R200m")
+                            ax2[row_indx,i//2].axvline(rs[i], color = "darkblue", ls = "dotted", lw = 3, alpha = 0.8, label = "Rs")
+                            ax2[row_indx,i//2].set(xscale = "log", yscale = "log")
+                            rmin, rmax = np.min(clusters[i].richness), np.max(clusters[i].richness)
+                            zmin, zmax = np.min(clusters[i].z), np.max(clusters[i].z)
+                            ax2[row_indx,i//2].set_title(r"$\mathbf{\lambda \in [%.i, %.i], z\in[%.2f, %.2f]}$" % (rmin, rmax, zmin, zmax), fontsize = 30)
+                            if physical_stacked_model == False:
+                                ax2[row_indx, i//2].text(0.9, 0.9, "$\\mathbf{\\gamma} = %.2f$" % gamma[i], ha = "right", va = "top", transform = ax2[row_indx, i//2].transAxes)
+                                ax2[row_indx, i//2].text(0.9, 0.8, "$\\mathbf{c_{200}} = %.2f$" % c[i], ha = "right", va = "top", transform = ax2[row_indx, i//2].transAxes)
+                            ax2[row_indx, i//2].text(0.1, 0.9, "\\mathbf{\\log_{10}{M_{200m}}} = %.2f" % M200m[i], ha = "left", va = "top", transform = ax2[row_indx, i//2].transAxes)
+                            ax2[row_indx, i//2].text(0.1, 0.8, "\\mathbf{z} = %.2f" % z[i], ha = "left", va = "top", transform = ax2[row_indx, i//2].transAxes)
+                            #ax2[i].errorbar(r_Mpc[i], clusters[i].mean_profile, yerr = clusters[i].error_in_mean, color = "red", markersize = 20, alpha = 0.8, fmt = "-o")
+                        
+                        ax2[-1,-1].legend(frameon = False)
+                        
+                        fig2.savefig(main_path + "ICMvsDM.png")
+                        fig2 = plt.figure(figsize=(35, 14))
+                        gs = fig2.add_gridspec(4, 4, height_ratios=[3, 1, 3, 1], hspace=0, wspace = 0)
+                        ax1 = fig2.add_subplot(gs[0,0])
+                        ax2 = fig2.add_subplot(gs[0,1], sharey=ax1)
+                        ax3 = fig2.add_subplot(gs[2,0])
+                        ax4 = fig2.add_subplot(gs[2,1], sharey=ax3)
+
+                        ax1_ratio = fig2.add_subplot(gs[1,0], sharex=ax1)
+                        ax2_ratio = fig2.add_subplot(gs[1,1], sharex=ax2, sharey=ax1_ratio)
+                        ax3_ratio = fig2.add_subplot(gs[3,0], sharex=ax3)
+                        ax4_ratio = fig2.add_subplot(gs[3,1], sharex=ax4, sharey=ax3_ratio)
+
+                        texts = [
+                            "$\\mathbf{z} = %.2f$\n$\\mathbf{\\log_{10}{M_{200m}}} = %.2f$\n$\\mathbf{\\gamma} = %.2f$\n$\\mathbf{c_{200}} = %.2f$" 
+                            % (z[i], np.log10(M200m[i]), gamma[i], c[i])
+                            for i in [0, 1, -2, -1]
+                        ]
+
+                        for ax, txt in zip([ax1, ax2, ax3, ax4], texts):
+                            ax.text(0.95, 0.95, txt, ha="right", va="top", fontsize=12,
+                                    transform=ax.transAxes,
+                                    bbox=dict(edgecolor="black", facecolor="white", alpha=0.5))
+
+                        # ax1.errorbar(r_Mpc[0], clusters[0].mean_profile, yerr = clusters[0].error_in_mean, color = "black", capsize = 3, fmt = "-o")
+                        # ax2.errorbar(r_Mpc[1], clusters[1].mean_profile, yerr = clusters[1].error_in_mean, color = "black", capsize = 3, fmt = "-o")
+                        # ax3.errorbar(r_Mpc[-2], clusters[-2].mean_profile, yerr = clusters[-2].error_in_mean, color = "black", capsize = 3, fmt = "-o")
+                        # ax4.errorbar(r_Mpc[-1], clusters[-1].mean_profile, yerr = clusters[-1].error_in_mean, color = "black", capsize = 3, fmt = "-o")
+
+                        def plot_models(ax, idx, c1, c2):
+                            ax.loglog(R_Mpc, profiles_arnaud[idx], color=c1, ls=":", lw=2)
+                            ax.loglog(R_Mpc, profiles_lim[idx], color=c1, ls="-.", lw=2)
+                            ax.loglog(R_Mpc, profiles_battaglia[idx], color=c1, ls="--", lw=2)
+
+                        for ax, idx in zip([ax1, ax2, ax3, ax4], [0, 1, -2, -1]):
+                            ax.loglog(R_Mpc, profiles_icm[idx], color="black", lw=3)
+                        for ax, idx in zip([ax1, ax2, ax3, ax4], [0, 1, -2, -1]):
+                            ax.loglog(R_Mpc, profiles_arnaud[idx], color="darkgreen", ls=":", lw=2)
+                        for ax, idx in zip([ax1, ax2, ax3, ax4], [0, 1, -2, -1]):
+                            if idx == 0 or idx == -2:
+                                ax.loglog(R_Mpc, profiles_lim[idx], color="darkblue", ls="-.", lw=2)
+                            else:
+                                ax.loglog(R_Mpc, profiles_mcdonald[idx], color="darkred", ls="-.", lw=2)
+                        for ax, idx in zip([ax1, ax2, ax3, ax4], [0, 1, -2, -1]):
+                            ax.loglog(R_Mpc, profiles_battaglia[idx], color="indigo", ls="--", lw=2)
+                        for ax, idx in zip([ax1, ax2, ax3, ax4], [0, 1, -2, -1]):
+                            ax.loglog(R_Mpc, profiles_tng[idx], color="darkorange", ls=(0, (3, 1, 1, 1, 1, 1)), lw=2)
+
+                        ax1.plot([], [], color="black", lw=4, label="This work", alpha = 0.8)
+                        ax1.plot([], [], color="darkgreen", ls=":", lw=3, label="Arnaud et al. 2010", alpha = 0.8)
+                        ax1.plot([], [], color="darkblue", ls="-.", lw=3, label="Lim et al. 2021", alpha = 0.8)
+                        ax1.plot([], [], color="indigo", ls="--", lw=3, label="Battaglia et al. 2012", alpha = 0.8)
+                        ax1.plot([], [], color="darkorange", ls=(0, (3, 1, 1, 1, 1, 1)), lw=3, label="TNG300-3", alpha = 0.8)
+                        
+                        ax2.plot([], [], color="darkred", ls="-.", lw=3, label="McDonald et al. 2014", alpha = 0.8)
+                        ax2.legend(frameon=False)
+                        ax1.legend(frameon=False)
+
+                        ax1.set_ylabel(r"$y(R)$")
+                        ax3.set_ylabel(r"$y(R)$")
+                        ax1.legend(frameon=False)
+                        def compute_ratio(a, b):
+                            ratio = np.full_like(a, np.nan)
+                            mask = (a > 0) & (b > 0)
+                            ratio[mask] = np.log10(b[mask] / a[mask])
+                            return ratio
+
+                        ratios = [
+                            (compute_ratio(profiles_icm[0], profiles_arnaud[0]),
+                            compute_ratio(profiles_icm[0], profiles_lim[0]),
+                            compute_ratio(profiles_icm[0], profiles_battaglia[0]),
+                            compute_ratio(profiles_icm[0], profiles_tng[0])),
+                            (compute_ratio(profiles_icm[1], profiles_arnaud[1]),
+                            compute_ratio(profiles_icm[1], profiles_lim[1]),
+                            compute_ratio(profiles_icm[1], profiles_battaglia[1]),
+                            compute_ratio(profiles_icm[1], profiles_tng[1])),
+                            (compute_ratio(profiles_icm[-2], profiles_arnaud[-2]),
+                            compute_ratio(profiles_icm[-2], profiles_lim[-2]),
+                            compute_ratio(profiles_icm[-2], profiles_battaglia[-2]),
+                            compute_ratio(profiles_icm[-2], profiles_tng[-2])),
+                            (compute_ratio(profiles_icm[-1], profiles_arnaud[-1]),
+                            compute_ratio(profiles_icm[-1], profiles_lim[-1]),
+                            compute_ratio(profiles_icm[-1], profiles_battaglia[-1]),
+                            compute_ratio(profiles_icm[-1], profiles_tng[-1])),
+                        ]
+
+                        axes_ratio = [ax1_ratio, ax2_ratio, ax3_ratio, ax4_ratio]
+                        colors = ["darkblue", "indigo", "darkorange", "darkgreen"]
+
+                        for ax, r in zip(axes_ratio, ratios):
+                            ax.semilogx(R_Mpc, r[0], ls=":", color="darkgreen", lw=4, alpha = 0.8)   # Arnaud
+                            ax.semilogx(R_Mpc, r[1], ls="-.", color="darkblue", lw=4, alpha = 0.8)   # Lim
+                            ax.semilogx(R_Mpc, r[2], ls="--", color="indigo", lw=4, alpha = 0.8)     # Battaglia
+                            ax.semilogx(R_Mpc, r[3], ls=(0, (3, 1, 1, 1, 1, 1)), color="darkorange", lw=4, alpha = 0.8)     # TNG
+                        ax1_ratio.set_ylabel(r"ratio [dex]")
+                        ax3_ratio.set_ylabel(r"ratio [dex]")
+
+                        ax3_ratio.set_xlabel(r"$R\ (\mathrm{Mpc})$")
+                        ax4_ratio.set_xlabel(r"$R\ (\mathrm{Mpc})$")
+
+                        ax1.set_title(r"$\mathbf{z \in [0.1, 0.4]}$")
+                        ax2.set_title(r"$\mathbf{z \in [0.4, 0.9]}$")
+
+                        for ax in [ax1, ax2]:
+                            ax.tick_params(labelbottom=False)
+
+    
+                        for ax in [ax2, ax4, ax2_ratio, ax4_ratio]:
+                            ax.tick_params(labelleft=False)
+
+
+                        for ax in [ax3_ratio, ax4_ratio]:
+                            ax.tick_params(labelbottom=True)
+
+
+                        for ax in [ax1, ax1_ratio, ax3, ax3_ratio]:
+                            ax.tick_params(labelleft=True)
+
+                        ax4_ratio.plot([], [], color="black", lw=3, label="This work - Arnaud")
+                        ax4_ratio.plot([], [], color="black", ls="--", lw=3, label= "This work - Battaglia")
+                        ax4_ratio.plot([], [], color="black", ls="-.", lw=3, label="This work - Lim")
+                        ax4_ratio.plot([], [], color="black", ls=(0, (3, 1, 1, 1, 1, 1)), lw=3, label="This work - TNG")
+                        ax1_ratio.set_ylim(-1.5, 1.5)
+                        ax3_ratio.set_ylim(-1.5, 1.5)
+
+                        ax1_ratio.axhline(0, color = "black", lw = 3, alpha = 0.25)
+                        ax2_ratio.axhline(0, color = "black", lw = 3, alpha = 0.25)
+                        ax3_ratio.axhline(0, color = "black", lw = 3, alpha = 0.25)
+                        ax4_ratio.axhline(0, color = "black", lw = 3, alpha = 0.25)
+
+                        ax4_ratio.legend(loc="lower left", ncol=2, frameon=False, fontsize=12)
+
+                        ax1_ratio.tick_params(labelbottom = False)
+                        ax2_ratio.tick_params(labelbottom = False)
+
+                        fig2.savefig(main_path + "ICMvsDM_ratio.png", bbox_inches="tight")
+
+                        def compute_regions(ratio, R_Mpc, R200_i):
+                            inner = np.nanmean(ratio[R_Mpc < 0.1 * R200_i])
+                            transition = np.nanmean(ratio[(0.1 * R200_i < R_Mpc) & (R_Mpc < R200_i)])
+                            outer = np.nanmean(ratio[R_Mpc > R200_i])
+                            return inner, transition, outer
+
+
+                        cluster_labels = [
+                            "[20,30],[0.1,0.4]",
+                            "[20,30],[0.4,0.9]",
+                            "[100,350],[0.4,0.9]",
+                            "[100,350],[0.1,0.3]"
+                        ]
+
+                        model_names = ["Arnaud", "Lim", "Battaglia", "TNG"]
+
+                        print("\n=== RATIOS ICM - MODELOS ===\n")
+
+                        for i, (rset, label) in enumerate(zip(ratios, cluster_labels)):
+                            print(f"=== Cluster {label} ===")
+                            
+                            for model_name, ratio in zip(model_names, rset):
+                                inner, transition, outer = compute_regions(ratio, R_Mpc, R200[[0,1,-2,-1][i]])
+                                
+                                print(f"--- {model_name} ---")
+                                print(f"inner      (R <= 0.1 R200): {inner}")
+                                print(f"transition (0.1-1 R200):   {transition}")
+                                print(f"outer      (R > R200):     {outer}")
+                            
+                            print("")
+                    
+                        #high redshift
+
+                        mcdonald14_all_lowz = [4.33, 2.59, 0.26, 1.63, 3.30]
+                        mcdonald14_all_highz = [3.47, 2.59, 0.15, 2.27, 3.48]
+
+                        fig2 = plt.figure(figsize = (20, 6))
+
+                        gs = fig2.add_gridspec(2, 2, height_ratios=[3, 1], hspace=0, wspace = 0)
+                        ax1 = fig2.add_subplot(gs[0,0])
+                        ax2 = fig2.add_subplot(gs[0,1], sharey=ax1)
+                        ax1_ratio = fig2.add_subplot(gs[1,0])
+                        ax2_ratio = fig2.add_subplot(gs[1,1], sharey=ax1_ratio)
+
+                        low_z = 0.46
+                        high_z = 0.82
+
+                        M500_high_z = 5.5*1e14
+                        M500_low_z = 4.2*1e14
+
+                        M200_high_z = 10**(fM500ctoM200m((np.log10(M500_high_z), high_z)))
+                        M200_low_z = 10**(fM500ctoM200m((np.log10(M500_low_z), low_z)))
+
+                        rho_c_high_z = planck18.critical_density(high_z).to(u.Msun / u.Mpc**3).value
+                        rho_m_high_z = planck18.Om(high_z) * rho_c_high_z
+                        rho_c_low_z = planck18.critical_density(low_z).to(u.Msun / u.Mpc**3).value
+                        rho_m_low_z = planck18.Om(low_z) * rho_c_low_z
+
+                        c_high_z = c200_0 * (M200_high_z/M0)**(c200_M) * ((1 + high_z)/(1 + z0))**(c200_z)
+                        c_low_z = c200_0 * (M200_low_z/M0)**(c200_M) * ((1 + low_z)/(1 + z0))**(c200_z)
+
+                        gamma_high_z = gamma0 * (M200_high_z/M0)**(gamma_M) * ((1 + high_z)/(1 + z0))**(gamma_z)
+                        gamma_low_z = gamma0 * (M200_low_z/M0)**(gamma_M) * ((1 + low_z)/(1 + z0))**(gamma_z)
+
+                        P_high_z = P0 * (M200_high_z/M0)**(P_M) * planck18.efunc(high_z)**(P_z)
+                        P_low_z = P0 * (M200_low_z/M0)**(P_M) * planck18.efunc(low_z)**(P_z)
+
+                        R200_high_z = (M200_high_z / (4.0 * np.pi / 3.0 * 200.0 * rho_m_high_z)) ** (1.0 / 3.0)
+                        R200_low_z = (M200_low_z / (4.0 * np.pi / 3.0 * 200.0 * rho_m_low_z)) ** (1.0 / 3.0)
+
+                        icm_mcdonald14_all_lowz = Arnaud10(R_Mpc, 10, M200_low_z, low_z, mcdonald14_all_lowz)
+                        icm_mcdonald14_all_highz = Arnaud10(R_Mpc, 10, M200_high_z, high_z, mcdonald14_all_highz)
+
+                        ax1.plot(R_Mpc, icm_mcdonald14_all_lowz, color = "darkorange", lw = 4, ls = "--")
+                        ax2.plot(R_Mpc, icm_mcdonald14_all_highz, color = "darkorange", lw = 4, ls = "dotted")
+
+                        rs_high_z = R200_high_z / c_high_z
+                        rs_low_z = R200_low_z / c_low_z
+
+                        profiles_icm_high_z = P_high_z / ((R_Mpc/rs_high_z)**gamma_high_z *(1 + (R_Mpc/rs_high_z)**alpha)**((beta - gamma_high_z)/alpha))*ycompton_factor
+                        profiles_icm_low_z = P_low_z / ((R_Mpc/rs_low_z)**gamma_low_z *(1 + (R_Mpc/rs_low_z)**alpha)**((beta - gamma_low_z)/alpha))*ycompton_factor
+
+                        ax1.plot(R_Mpc, profiles_icm_low_z, color = "black", lw = 4)
+                        ax2.plot(R_Mpc, profiles_icm_high_z, color = "black", lw = 4)
+
+                        ratio_lowz = compute_ratio(profiles_icm_low_z, icm_mcdonald14_all_lowz)
+                        ratio_highz = compute_ratio(profiles_icm_high_z, icm_mcdonald14_all_highz)
+
+                        ax1_ratio.plot(R_Mpc, ratio_lowz, color = "black", lw = 4)
+                        ax2_ratio.plot(R_Mpc, ratio_highz, color = "black", lw = 4)
+
+                        ax1.set(xscale = "log", yscale = "log", xlabel = "R $(\mathrm{Mpc})$", ylabel = "y(R)")
+                        ax2.set(xscale = "log", yscale = "log", xlabel = "R $(\mathrm{Mpc})$", ylabel = "y(R)")
+                        ax1_ratio.set(xscale = "log", yscale = "linear", xlabel = "R $(\mathrm{Mpc})$", ylabel = "ratio [dex]")
+                        ax2_ratio.set(xscale = "log", yscale = "linear", xlabel = "R $(\mathrm{Mpc})$", ylabel = "ratio [dex]")
+
+                        ax2.tick_params(left=False, labelleft=False)
+                        ax2_ratio.tick_params(left=False, labelleft=False)
+
+                        ax2.set_ylabel("")
+                        ax2_ratio.set_ylabel("")
+
+                        ax1.plot([],[], color = "darkorange", label = "Mcdonald 2014", lw = 4)
+                        ax1.plot([],[], color = "black", label = "This work", lw = 4)
+                        
+                        ax1.legend(loc = "lower left", fontsize = 20)
+
+                        # ax1.set_title(r"$\mathbf{z = [0.1, 0.4]}$")
+                        # ax2.set_title(r"$\mathbf{z = [0.4, 0.9]}$")
+
+                        ax1_ratio.set_ylim(-1.5, 1.5)
+                        ax2_ratio.set_ylim(-1.5, 1.5)
+
+                        ax1.text(0.95, 0.95, 
+                                        "$\\mathbf{z} = %.2f$\n$\\mathbf{\\log_{10}{M_{200m}}} = %.2f$"  % (low_z, np.log10(M200m[0])),
+                                        ha="right", va="top", fontsize=12,
+                                        transform=ax1.transAxes,
+                                        bbox=dict(edgecolor="black", facecolor="white", alpha=0.5))
+                        ax2.text(0.95, 0.95, 
+                                        "$\\mathbf{z} = %.2f$\n$\\mathbf{\\log_{10}{M_{200m}}} = %.2f$"  % (high_z, np.log10(M200m[-1])),
+                                        ha="right", va="top", fontsize=12,
+                                        transform=ax2.transAxes,
+                                        bbox=dict(edgecolor="black", facecolor="white", alpha=0.5))
+
+                        fig2.savefig(f"{main_path}/profiles_icm_mcdonad14.png", bbox_inches = "tight")
+
                     if plot_comparison == True:
                         profiles = profile_comparison_kwargs["profiles"]
                         profile_params = profile_comparison_kwargs["params"]
@@ -1646,13 +2224,17 @@ def plot_general_mcmc(main_path, source_file, model, labels, ndims = None, nwalk
                                 func,cov, about_clusters, clusters, _, funcs = grouped_clusters.stacked_halo_model_func_by_paths(getattr(profiles_module, pi),
                                                     full = True, Mbins = Mbins, Rbins = rbins, Zbins = zbins, paths = paths,
                                                     verbose_pivots = True, use_filters = use_filters, filters = filters_dict, completeness_kwargs = dict(completeness_config), 
-                                                    use_two_halo_term = use_two_halo_term, two_halo_kwargs = two_halo_kwargs, use_mis_centering = use_mis_centering, 
+                                                    use_two_halo_term = True, two_halo_kwargs = two_halo_kwargs, use_mis_centering = True, 
                                                     fixed_RM_relationship = fixed_halo_model
-                                                    ,background = background, delta = delta, eval_mass = eval_mass, 
+                                                    ,background = background, delta = delta, eval_mass = eval_m, 
                                                     apply_filter_per_profile = apply_filter_per_profile
-                                                    ,rebinning = use_rebinning, rebinning_kwargs = rebinning_kwargs
-                                                    ,subr_grid = subr_grid, 
+                                                    ,rebinning = True, rebinning_kwargs = rebinning_kwargs
+                                                    ,subr_grid = subr_grid,
                                                     subr_grid_kwargs = subr_grid_kwargs,)
+                                bins = np.array([[*c.richness_bin, *c.redshift_bin] for c in clusters])
+                                sorted_idx = np.lexsort((bins[:,3], bins[:,2], bins[:,1], bins[:,0]))
+                                bins = bins[sorted_idx]
+                                clusters = [clusters[i] for i in sorted_idx]
                                 R = clusters[-1].R
                                 P = func(R, pars)
                                 P = P.reshape((len(clusters), len(R)))
@@ -1673,7 +2255,7 @@ def plot_general_mcmc(main_path, source_file, model, labels, ndims = None, nwalk
                                         idx = i
                                     ax = axes[i]
                                     c = clusters[idx]
-                                    ax.plot(R, P[i], label = name)
+                                    ax.plot(R, P[idx], label = name)
                     nrows = len(axs)
                     ncols = len(axs[0])
 
@@ -1690,7 +2272,7 @@ def plot_general_mcmc(main_path, source_file, model, labels, ndims = None, nwalk
                                 ax.tick_params(labelbottom=False)
                     axs = axes.flatten()
                     fig.suptitle(model_name, fontsize = 18, fontweight = "bold")
-                    axs[0].legend(loc = legend_pos, fontsize = 10, frameon=False)
+                    axs[0].legend(loc = legend_pos, fontsize = 14, frameon=False)
                 elif share_plot == True:
                     fig, ax = plt.subplots(figsize = (14,8))
                     colors = np.random.choice(list(mcolors.CSS4_COLORS.keys()), size  = num_profiles)
@@ -1700,6 +2282,8 @@ def plot_general_mcmc(main_path, source_file, model, labels, ndims = None, nwalk
                     val = [np.nanmedian(c.richness) + np.nanmedian(c.z) for c in clusters]
                     sorted_idx = np.argsort(val)
                     for i, idx in enumerate(sorted_idx):
+                        if sort_by_redshift == True:
+                            idx = sorted_idx_redshift[i]
                         color = colors[i]
                         c = clusters[idx]
                         zmin, zmax = np.nanmin(c.z), np.max(c.z)
@@ -1746,21 +2330,22 @@ def plot_general_mcmc(main_path, source_file, model, labels, ndims = None, nwalk
                         mu, sigma = np.median(chi2_mc), np.std(chi2_mc)
                         fig2, ax2 = plt.subplots(figsize = (12,6))
                         ax2.hist(chi2_mc, bins = 100, histtype = "step", color = "black", density = True, alpha = 0.5, label = r"$\chi^2$ realizations")
-                        chi2_obs = chi2_values[chi2_values < 2000]
-                        mu_obs, sigma_obs = np.median(chi2_obs), np.std(chi2_obs)
-                        ax2.hist(chi2_obs, bins = 100, histtype = "step", color = "darkgreen", density = True, alpha = 0.5, label = r"$\chi^2$ observed")
-                        ax2.plot(np.arange(0, 1.5*np.max(chi2_mc), 0.1), np.exp(-0.5*(np.arange(0, 1.5*np.max(chi2_mc), 0.1) - mu)**2/sigma**2)/np.sqrt(2*np.pi*sigma**2), color = "black", ls = "--")
-                        ax2.plot(np.arange(0, 1.5*np.max(chi2_obs), 0.1), np.exp(-0.5*(np.arange(0, 1.5*np.max(chi2_obs), 0.1) - mu_obs)**2/sigma_obs**2)/np.sqrt(2*np.pi*sigma_obs**2), color = "darkgreen", ls = "--")
-                        ax2.set_xlabel(r"$\chi^2$")
-                        ax2.set_ylabel("Density")
-                        ax2.set(yscale = "linear", xscale = "linear")
-                        ax2.set_xlim((np.clip(mu - 4*sigma, 0, np.inf), 1.5*np.max(chi2_obs)))
-                        _,ylim = ax2.get_ylim()
-                        ax2.fill_between(np.arange(mu - 3*sigma, mu + 3*sigma, 0.1), 0, ylim, color = "grey", alpha = 0.5)
-                        ax2.axvline(chi2, color = "red", label = r"$\chi^2$ best fit")
-                        ax2.legend()
-                        fig2.tight_layout()
-                        fig2.savefig(output_path + f"chi2_realizations.png")
+                        chi2_obs = chi2_values[chi2_values<100]
+                        if len(chi2_obs) > 0:
+                            mu_obs, sigma_obs = np.median(chi2_obs), np.std(chi2_obs)
+                            ax2.hist(chi2_obs, bins = 100, histtype = "step", color = "darkgreen", density = True, alpha = 0.5, label = r"$\chi^2$ observed")
+                            ax2.plot(np.arange(0, 1.5*np.max(chi2_mc), 0.1), np.exp(-0.5*(np.arange(0, 1.5*np.max(chi2_mc), 0.1) - mu)**2/sigma**2)/np.sqrt(2*np.pi*sigma**2), color = "black", ls = "--")
+                            ax2.plot(np.arange(0, 1.5*np.max(chi2_obs), 0.1), np.exp(-0.5*(np.arange(0, 1.5*np.max(chi2_obs), 0.1) - mu_obs)**2/sigma_obs**2)/np.sqrt(2*np.pi*sigma_obs**2), color = "darkgreen", ls = "--")
+                            ax2.set_xlabel(r"$\chi^2$")
+                            ax2.set_ylabel("Density")
+                            ax2.set(yscale = "linear", xscale = "linear")
+                            ax2.set_xlim((np.clip(mu - 4*sigma, 0, np.inf), 1.5*np.max(chi2_obs)))
+                            _,ylim = ax2.get_ylim()
+                            ax2.fill_between(np.arange(mu - 3*sigma, mu + 3*sigma, 0.1), 0, ylim, color = "grey", alpha = 0.5)
+                            ax2.axvline(chi2, color = "red", label = r"$\chi^2$ best fit")
+                            ax2.legend()
+                            fig2.tight_layout()
+                            fig2.savefig(output_path + f"chi2_realizations.png")
                     bic = BIC(np.size(profiles), len(params), max_ln_likelihood)
                     text  = [
                             r'$\chi^{2} = %.4f$' % chi2,
@@ -1780,7 +2365,11 @@ def plot_general_mcmc(main_path, source_file, model, labels, ndims = None, nwalk
                         props = dict(boxstyle = 'round', facecolor = 'white', edgecolor = 'black', alpha = 0.8)
                         fig.text(0.12, 0.9, s, fontsize=16, va='top', ha='right', family='monospace', bbox=props, color = 'black',)     
                 fig.tight_layout()           
-                fig.savefig(f"{output_path}/best_fitting.png", dpi = args.dpi, transparent = False)   
+                if args.add_id == False:
+                    fig.savefig(f"{output_path}/best_fitting.png", dpi = args.dpi, transparent = False)   
+                else:
+                    n_files = len([name for name in os.listdir(output_path) if "best_fitting" in name])
+                    fig.savefig(f"{output_path}/best_fitting_{n_files}.png", dpi = args.dpi, transparent = False)
             elif plot_degenerancies == True:
                 arg = int(input("Enter argument index:"))
                 intervals = input("Enter intervals edges separated by comma: ").split(",")
@@ -1873,7 +2462,7 @@ def plot_general_mcmc(main_path, source_file, model, labels, ndims = None, nwalk
                                 else:
                                     ax.axis('off')
                 axs = axes.flatten()
-                axs[0].legend(fontsize = 10)
+                axs[0].legend(fontsize = 14)
                 fig.savefig(f"{output_path}/degeneracies.png", dpi = args.dpi, transparent = False)
 
     elif np.iterable(discard) == True:
@@ -1903,7 +2492,11 @@ def plot_general_mcmc(main_path, source_file, model, labels, ndims = None, nwalk
                 axes[-1][-1].scatter([],[], color = corner_color, marker = "s", label = f"N steps $=[{d1},{d2}]$")
         if corner_:
             corner_fig.legend(fontsize = 16)
-            corner_fig.savefig(f"{output_path}/corner.png", dpi = args.dpi)   
+            if args.add_id == False:
+                corner_fig.savefig(f"{output_path}/corner.png", dpi = args.dpi)   
+            else:
+                n_files = len([name for name in os.listdir(output_path) if "corner" in name])
+                fig.savefig(f"{output_path}/corner_{n_files}.png", dpi = args.dpi)
     if make_copy == True:
         os.remove(copy)
 def plot_mcmc(source_path, model, labels, ndims = None, nwalkers = None, fil_name = 'mcmc_samples', ext = 'h5', fig_corner = None, fig_profile = None,
@@ -2017,8 +2610,11 @@ def plot_mcmc(source_path, model, labels, ndims = None, nwalkers = None, fil_nam
                           signal = signal2bound, fit = fit, P1halo = P1halo, P2halo = P2halo, best_fit = best_signal, **profiles_kwargs)
             ax.grid(True)
             fig.tight_layout()
-            fig.savefig(f"{source_path}/best_fitting.png", dpi = args.dpi)  
-
+            if args.add_id == False:
+                fig.savefig(f"{source_path}/best_fitting.png", dpi = args.dpi)  
+            else:
+                n_files = len([name for name in os.listdir(output_path) if "best_fitting" in name])
+                fig.savefig(f"{output_path}/best_fitting_{n_files}.png", dpi = args.dpi)
             chi2 = np.nanmin(chi2_values)
             p_value, chi2_mc = pte(chi2, group.cov, return_samples= True, n_samples=1000000)
             chi2_mc = chi2_mc.flatten()
@@ -2074,7 +2670,8 @@ def plot_corner(chain, fig = None, truths = None, truths_color = "black", truths
                 corner_label = None, corner_color = "blue", other = None, other_label = None, 
                 other_color = None, levels = (1-np.exp(-0.5), 1-np.exp(-2) ), bins = 30,  fontsize = 14,
                 labels = None, show_labels = False, quantiles = [0.16, 0.5, 0.84] , alpha = 0.5,
-                range_sigma_ratio = 4, plot_priors = True, priors = None, priors_args= None, **kwargs):
+                range_sigma_ratio = 4, plot_priors = True, priors = None, priors_args= None, add_pearson = True
+                , **kwargs):
     default_title_kwargs = (
         ("fontsize", 20),
     )
@@ -2143,13 +2740,19 @@ def plot_corner(chain, fig = None, truths = None, truths_color = "black", truths
     if range_sigma_ratio is not None:
         for i in range(ndims):
             for j in range(i + 1):
-                pminx, pmedianx, pmaxx = calculate_sigma_intervals(chain[:,j], sigma = range_sigma_ratio)
-                pminy, pmediany, pmaxy = calculate_sigma_intervals(chain[:,i], sigma = range_sigma_ratio)
+                # pminx, pmedianx, pmaxx = calculate_sigma_intervals(chain[:,j], sigma = range_sigma_ratio)
+                # pminy, pmediany, pmaxy = calculate_sigma_intervals(chain[:,i], sigma = range_sigma_ratio)
+                pmedianx = np.median(chain[:,j])
+                pmediany = np.median(chain[:,i])
+                sigmax = np.std(chain[:,j])
+                sigmay = np.std(chain[:,i])
+                pminx, pmaxx = pmedianx - range_sigma_ratio*sigmax, pmedianx + range_sigma_ratio*sigmax
+                pminy, pmaxy = pmediany - range_sigma_ratio*sigmay, pmediany + range_sigma_ratio*sigmay
                 if i != j:
-                    axes[i][j].set_ylim((pmediany - pminy, pmediany + pmaxy))
-                    axes[i][j].set_xlim((pmedianx - pminx, pmedianx + pmaxx))
+                    axes[i][j].set_ylim((pminy, pmaxy))
+                    axes[i][j].set_xlim((pminx, pmaxx))
                 elif i == j:
-                    axes[i][j].set_xlim((pmedianx - pminx, pmedianx + pmaxx))  
+                    axes[i][j].set_xlim((pminx, pmaxx))  
     if plot_priors == True:
         if priors is not None and priors_args is not None:
             counter = 0
@@ -2162,13 +2765,35 @@ def plot_corner(chain, fig = None, truths = None, truths_color = "black", truths
                         else:
                             if "uniform" in str(prior) or "flat" in str(prior):
                                 continue
-                            line = axes[i][j].lines[0]
-                            xdata,ydata = np.array(line.get_xdata()), np.array(line.get_ydata())
-                            xnew = np.linspace(xdata.min(), xdata.max(), 1000)
-                            p = np.exp(np.array([prior(xnew_i, *pargs) for xnew_i in xnew]))
-                            p = p / p.max() * ydata.max()
-                            axes[i][j].fill_between(xnew, p, color = 'darkgreen', lw = 3, alpha = 0.2, edgecolor = "darkgreen")
-
+                            if smooth is not None:
+                                line = axes[i][j].lines[0]
+                                xdata,ydata = np.array(line.get_xdata()), np.array(line.get_ydata())
+                                xmin, xmax = axes[i][j].get_xlim()
+                                xnew = np.linspace(xmin, xmax, 1000)
+                                p = np.exp(np.array([prior(xnew_i, *pargs) for xnew_i in xnew]))
+                                p = p / p.max() * ydata.max()
+                                axes[i][j].fill_between(xnew, p, color = 'darkgreen', lw = 3, alpha = 0.2, edgecolor = "darkgreen")
+                            else:
+                                patches = axes[i][j].patches
+                                data = np.array([patches[i].get_xy() for i in range(len(patches))])
+                                xdata = np.array([data[0,i,0] for i in range(len(data[0]))])
+                                ydata = np.array([data[0,i,1] for i in range(len(data[0]))])
+                                xmin, xmax = axes[i][j].get_xlim()
+                                xnew = np.linspace(xmin, xmax, 1000)
+                                p = np.exp(np.array([prior(xnew_i, *pargs) for xnew_i in xnew]))
+                                p = p / p.max() * ydata.max()
+                                axes[i][j].fill_between(xnew, p, color = 'darkgreen', lw = 3, alpha = 0.2, 
+                                edgecolor = "darkgreen", transform = axes[i][j].transAxes)
+    if add_pearson == True:
+        for i in range(ndims):
+            for j in range(i):
+                pvalue = pearsonr(chain[:,i], chain[:,j]).pvalue
+                pearson = pearsonr(chain[:,i], chain[:,j])[0]
+                if np.abs(pearson) > 0.5:
+                    #axes[i][j].text(0.9, 0.2, "$\mathbf{%.5e}$" % pvalue, ha = "right", va = "center", fontsize = 10, fontweight = "bold", color = "black",
+                    #transform = axes[i][j].transAxes)
+                    axes[i][j].text(0.9, 0.1, str(np.round(pearson, 2)), ha = "right", va = "center", fontsize = 10, fontweight = "bold", color = "black",
+                    transform = axes[i][j].transAxes)
     ax = fig.get_axes()[0]
     ax.scatter([],[], color = corner_color, label = corner_label, marker = 's')
     ax.scatter([],[], color = truths_color, label = truths_label, marker = 's')
@@ -2414,6 +3039,7 @@ def plot_profiles(R, data, model, params, cov, labels, lower, upper, max_ln_like
                   show_results = False, signal = None, plot_bounds = True, min_chi2 = None, show_error_bars = True, 
                   specific_pte = None, specific_chi2 = None, P1halo = None, P2halo = None, plot_median = True, 
                   plot_best = False,  best_fit1halo = None, best_fit2halo = None, plot_1h2h = False,**kwargs):
+    
     default_fig_kwargs = (
         ("figsize",(8,8)),    
     )
@@ -2439,7 +3065,7 @@ def plot_profiles(R, data, model, params, cov, labels, lower, upper, max_ln_like
     default_bounds_plot_kwargs = (
         ("color","grey"),
         ("alpha",0.3),
-        ("label",r"$1 \sigma$")
+        ("label",r"$2 \sigma$")
     )
     default_text_kwargs = (
         ("fontsize", 11),
@@ -2549,7 +3175,7 @@ def plot_profiles(R, data, model, params, cov, labels, lower, upper, max_ln_like
             ax.text(0.05, 0.05, text, transform=ax.transAxes, **text_kwargs)
     ax.set(**ax_kwargs)
     if show_legend == True:
-        ax.legend(loc = "lower left")
+        ax.legend(loc = "lower left", fontsize = 18)
     if output_file is not None:
         fig.savefig(output_file, dpi = args.dpi, transparent = False)   
     return ax, fig, chi2, bic
